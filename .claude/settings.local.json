@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api.apify.com)",
+      "Bash(curl:*)",
+      "WebFetch(domain:apify.com)",
+      "Bash(python3:*)",
+      "Bash(npx create-next-app@14 frontend --typescript --tailwind --app --no-src-dir --import-alias \"@/*\" --use-npm)",
+      "Bash(npm install:*)"
+    ]
+  }
+}

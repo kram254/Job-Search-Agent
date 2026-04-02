@@ -1,0 +1,49 @@
+{
+  "personal_details": {
+    "name": "",
+    "email": "",
+    "phone": {
+      "primary": "",
+      "secondary": ""
+    },
+    "nationality": "",
+    "remote_only": false
+  },
+  "work_authorization": {
+    "kenya": "citizen",
+    "other_countries": "HITL_required"
+  },
+  "professional_profiles": {
+    "linkedin": "",
+    "github": "",
+    "medium": ""
+  },
+  "cv_variants": {
+    "paths": [
+      "",
+      "",
+      ""
+    ],
+    "pdf_paths": [
+      "",
+      "",
+      ""
+    ]
+  },
+  "education": [
+    {
+      "degree": "",
+      "institution": "",
+      "years": ""
+    }
+  ],
+  "skills": {
+    "primary": [],
+    "secondary": []
+  },
+  "sensitive_fields": {
+    "ssn": "",
+    "salary": "",
+    "references": "__HITL_REQUIRED__"
+  }
+}
