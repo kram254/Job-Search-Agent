@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: job-search-backend
+    env: python
+    buildCommand: |
+      pip install -r requirements.txt
+      playwright install chromium
+    startCommand: gunicorn agent.app:app
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PYTHON_PATH
+        value: .
+    disk:
+      name: data-storage
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+
+  - type: web
+    name: job-search-frontend
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    publishDir: .next
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          name: job-search-backend
+          type: web
+          property: host

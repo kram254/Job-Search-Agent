@@ -1,0 +1,11 @@
+{
+  "review_fields": [
+    "cover_letter",
+    "summary",
+    "why_*",
+    "additional_information"
+  ],
+  "auto_approve_standard_consent": true,
+  "always_use_default_cv": false,
+  "default_cv": "SoftwareDevCV.pdf"
+}
