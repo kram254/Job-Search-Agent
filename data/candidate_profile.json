@@ -1,12 +1,12 @@
 {
   "personal_details": {
-    "name": "",
-    "email": "",
+    "name": "EMMANUEL M NDALIRO",
+    "email": "markorlando45@gmail.com",
     "phone": {
-      "primary": "",
+      "primary": "+254728427263",
       "secondary": ""
     },
-    "nationality": "",
+    "nationality": "KENYAN",
     "remote_only": false
   },
   "work_authorization": {
@@ -14,36 +14,53 @@
     "other_countries": "HITL_required"
   },
   "professional_profiles": {
-    "linkedin": "",
-    "github": "",
-    "medium": ""
+    "linkedin": "https://www.linkedin.com/in/mark-imanuel-501771124/",
+    "github": "https://github.com/kram254/",
+    "medium": "https://medium.com/@kram254"
   },
   "cv_variants": {
     "paths": [
-      "",
-      "",
-      ""
+      "CVs/My CVc.md",
+      "CVs/Soft Dev CV.md",
+      "CVs/SoftwareDevCV.md"
     ],
-    "pdf_paths": [
-      "",
-      "",
-      ""
-    ]
+    "pdf_paths": []
   },
   "education": [
     {
-      "degree": "",
-      "institution": "",
-      "years": ""
+      "degree": "BSc. in Software Engineering",
+      "institution": "Multimedia University of Kenya",
+      "years": "2015-2019"
     }
   ],
   "skills": {
-    "primary": [],
-    "secondary": []
+    "primary": [
+      "Python",
+      "Machine Learning",
+      "LLMs",
+      "RAG",
+      "Agentic RAG",
+      "AI Agents",
+      "MCPs",
+      "A2A",
+      "Flask",
+      "Django"
+    ],
+    "secondary": [
+      "Flutter",
+      "Dart",
+      "AWS",
+      "Azure",
+      "GCP",
+      "Docker",
+      "Selenium",
+      "Playwright",
+      "Firebase"
+    ]
   },
   "sensitive_fields": {
-    "ssn": "",
-    "salary": "",
+    "ssn": "__HITL_REQUIRED__",
+    "salary": "__HITL_REQUIRED__",
     "references": "__HITL_REQUIRED__"
   }
 }

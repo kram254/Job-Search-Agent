@@ -28,11 +28,13 @@ from typing import Dict, Any, Optional
 # Local imports – absolute to support running from the project root
 from agent.platforms.base import BasePlatformHandler
 from agent.platforms.greenhouse import GreenhouseHandler
-from agent.platforms.linkedin import LinkedInHandler   # will be created later
-from agent.platforms.indeed import IndeedHandler        # will be created later
-from agent.llm.field_mapper import FieldMapper
+from agent.platforms.linkedin import LinkedInHandler
+from agent.platforms.indeed import IndeedHandler
+from agent.llm.field_mapper import FieldMapper, JobEvaluation, Archetype
 from agent.browser.playwright_wrapper import BrowserWrapper
 from agent.tracker.logger import Logger
+from agent.services.pdf_generator import PDFGenerator, PDFGenerationResult
+from agent.scanner.portal_scanner import PortalScanner
 
 # --------------------------------------------------------------------------- #
 # Configuration & constants
@@ -82,6 +84,9 @@ class ApplicationOrchestrator:
 
         # Mapping of platform name → handler instance (lazy‑loaded)
         self.platform_handlers: Dict[str, BasePlatformHandler] = {}
+        self.current_evaluation: Optional[JobEvaluation] = None
+        self.pdf_generator = PDFGenerator(output_dir="output/cvs")
+        self.tailored_cv_path: Optional[str] = None
 
     # --------------------------------------------------------------------------- #
     # 1️⃣ Public entry point
@@ -271,14 +276,288 @@ class ApplicationOrchestrator:
     # --------------------------------------------------------------------------- #
     def _map_fields(self, inventory: list) -> list:
         """
-        Calls FieldMapper to produce a list of field mappings with confidence
-        scores and HITL flags.
+        Calls FieldMapper with archetype-aware evaluation to produce
+        field mappings with confidence scores and HITL flags.
         """
-        mapper = FieldMapper(candidate_profile=self.candidate_profile,
-                             job_description=self.job_meta.get("description", ""))
+        # Read CV text if available
+        cv_text = ""
+        if hasattr(self, 'tailored_cv_path') and self.tailored_cv_path:
+            try:
+                with open(self.tailored_cv_path, "r", encoding="utf-8") as f:
+                    cv_text = f.read()
+            except:
+                pass
+
+        job_description = self.job_meta.get("description", "")
+
+        # Use the new career-ops FieldMapper
+        mapper = FieldMapper(
+            candidate_profile=self.candidate_profile,
+            job_description=job_description,
+            cv_text=cv_text
+        )
+
+        # Store evaluation for later use
+        self.current_evaluation = mapper.evaluate_job()
+
+        # Log evaluation summary
+        summary = mapper.get_evaluation_summary()
+        logging.info(f"[Session] Archetype: {summary['archetype']} (confidence: {summary['confidence']:.2f})")
+        logging.info(f"[Session] Global Score: {summary['global_score']:.2f}")
+        logging.info(f"[Session] Recommendation: {summary['recommendation']}")
+
+        # Generate mappings
         mappings = mapper.map_fields(inventory)
         logging.debug(f"[Session] Mapped fields: {mappings[:3]}")
         return mappings
+
+    def run_apply_mode(self, job_id: str, apply_url: str,
+                       cv_path: str = "cv.md",
+                       auto_submit: bool = False) -> Dict[str, Any]:
+        """
+        Career-ops inspired apply mode with full evaluation pipeline.
+
+        Steps:
+        1. Archetype detection & job evaluation (A-F scoring)
+        2. CV tailoring with keyword injection
+        3. PDF generation
+        4. Interview story preparation
+        5. Form filling with archetype-aware mapping
+        6. Final submission (HITL-gated unless auto_submit)
+
+        Returns: Application result with evaluation and interview prep.
+        """
+        session_id = self._new_session_id()
+        logging.info(f"[Apply Mode {session_id}] Starting for job_id={job_id}")
+
+        # Resolve job metadata
+        job_meta = next((j for j in self.jobs_raw if j["id"] == job_id), None)
+        if not job_meta:
+            raise ValueError(f"Job ID {job_id} not found in jobs_raw.json")
+        self.job_meta = job_meta
+
+        job_description = job_meta.get("description", "")
+        company_name = job_meta.get("company", "unknown")
+
+        # Step 1: Evaluate job (archetype detection + A-F scoring)
+        self._evaluate_job_for_apply(job_description, cv_path)
+
+        # Check if job is worth applying to
+        if self.current_evaluation and self.current_evaluation.global_score < 3.5:
+            logging.warning(f"[Apply Mode] Low match score ({self.current_evaluation.global_score:.1f}), skipping")
+            return {
+                "session_id": session_id,
+                "job_id": job_id,
+                "status": "skipped",
+                "reason": f"Low match score: {self.current_evaluation.global_score:.1f}",
+                "evaluation": self.current_evaluation
+            }
+
+        # Step 2 & 3: Generate tailored CV PDF
+        try:
+            pdf_result = self.pdf_generator.generate_tailored_cv(
+                cv_markdown_path=cv_path,
+                job_description=job_description,
+                candidate_profile=self.candidate_profile,
+                archetype=self.current_evaluation.archetype.value if self.current_evaluation else "general",
+                company_name=company_name
+            )
+            self.tailored_cv_path = pdf_result.pdf_path
+            logging.info(f"[Apply Mode] Generated tailored CV: {pdf_result.pdf_path}")
+        except Exception as e:
+            logging.warning(f"[Apply Mode] PDF generation failed: {e}")
+            self.tailored_cv_path = None
+
+        # Step 4: Prepare interview stories
+        interview_prep = self._prepare_interview_stories()
+
+        # Step 5: Run the actual application workflow
+        final_url = self._resolve_final_url(apply_url)
+        platform_name = self._detect_platform(final_url)
+        handler = self._get_or_create_handler(platform_name)
+        handler.session_id = session_id
+        handler.logger = self.logger
+
+        # Use tailored CV for upload
+        if self.tailored_cv_path:
+            handler.selected_cv_path = self.tailored_cv_path
+
+        # Run workflow with optional auto-submit
+        result = self._run_apply_workflow(handler, final_url, auto_submit)
+
+        return {
+            "session_id": session_id,
+            "job_id": job_id,
+            "status": result.get("status", "unknown"),
+            "evaluation": self._get_evaluation_summary(),
+            "interview_prep": interview_prep,
+            "cv_path": self.tailored_cv_path,
+            "company": company_name,
+            "archetype": self.current_evaluation.archetype.value if self.current_evaluation else "unknown"
+        }
+
+    def _evaluate_job_for_apply(self, job_description: str, cv_path: str) -> None:
+        """Run job evaluation for apply mode."""
+        cv_text = ""
+        if Path(cv_path).exists():
+            try:
+                with open(cv_path, "r", encoding="utf-8") as f:
+                    cv_text = f.read()
+            except Exception as e:
+                logging.warning(f"[Apply Mode] Could not read CV: {e}")
+
+        mapper = FieldMapper(
+            candidate_profile=self.candidate_profile,
+            job_description=job_description,
+            cv_text=cv_text
+        )
+
+        self.current_evaluation = mapper.evaluate_job()
+
+        # Log detailed evaluation
+        for block_name, block in self.current_evaluation.blocks.items():
+            logging.info(f"[Eval Block {block_name}] Score: {block.score:.1f} - {block.reasoning}")
+
+    def _prepare_interview_stories(self) -> Dict[str, Any]:
+        """Prepare STAR+R interview stories based on archetype."""
+        if not self.current_evaluation:
+            return {"stories": [], "themes": []}
+
+        stories = self.current_evaluation.interview_stories
+        archetype = self.current_evaluation.archetype.value
+
+        # Format for human review
+        formatted_stories = []
+        for story in stories:
+            formatted_stories.append({
+                "situation": story.get("situation", ""),
+                "task": story.get("task", ""),
+                "action": story.get("action", ""),
+                "result": story.get("result", ""),
+                "reflection": story.get("reflection", ""),
+                "formatted": self._format_star_story(story)
+            })
+
+        return {
+            "stories": formatted_stories,
+            "themes": self.current_evaluation.cv_tailoring_plan.get("highlight_projects", []),
+            "archetype": archetype,
+            "recommended_prep": self._get_interview_recommendations(archetype)
+        }
+
+    def _format_star_story(self, story: Dict[str, str]) -> str:
+        """Format a STAR+R story for display."""
+        return f"""
+**Situation**: {story.get('situation', '')}
+**Task**: {story.get('task', '')}
+**Action**: {story.get('action', '')}
+**Result**: {story.get('result', '')}
+**Reflection**: {story.get('reflection', '')}
+        """.strip()
+
+    def _get_interview_recommendations(self, archetype: str) -> List[str]:
+        """Get interview prep recommendations based on archetype."""
+        recommendations = {
+            "ai_platform_llmops": [
+                "Prepare examples of LLM monitoring/observability",
+                "Practice discussing eval frameworks and metrics",
+                "Review your experience with production ML systems"
+            ],
+            "agentic_automation": [
+                "Prepare agent architecture examples",
+                "Practice HITL design discussions",
+                "Review workflow orchestration experience"
+            ],
+            "technical_ai_pm": [
+                "Prepare roadmap examples with trade-offs",
+                "Practice stakeholder management stories",
+                "Review AI product metrics and KPIs"
+            ],
+            "ai_solutions_architect": [
+                "Prepare system design discussions",
+                "Practice enterprise integration examples",
+                "Review architecture decision records"
+            ],
+            "ai_forward_deployed": [
+                "Prepare rapid prototyping examples",
+                "Practice client communication scenarios",
+                "Review deployment troubleshooting stories"
+            ],
+            "ai_transformation": [
+                "Prepare change management examples",
+                "Practice adoption metric discussions",
+                "Review training/enablement experience"
+            ]
+        }
+        return recommendations.get(archetype, ["Prepare general technical and behavioral questions"])
+
+    def _run_apply_workflow(self, handler: BasePlatformHandler,
+                           url: str, auto_submit: bool) -> Dict[str, str]:
+        """
+        Run the apply workflow with optional auto-submit.
+        Career-ops: No auto-submission by default (HITL required).
+        """
+        try:
+            # Login handling
+            self._handle_login(handler)
+
+            # CV selection (use tailored CV if available)
+            self._handle_cv_selection(handler)
+
+            # Form discovery
+            inventory = self._discover_form_inventory()
+            logging.info(f"[Apply Workflow] Discovered {len(inventory)} form fields")
+
+            # Field mapping with evaluation context
+            field_mappings = self._map_fields(inventory)
+
+            # Log archetype info in mappings
+            if field_mappings:
+                archetype = field_mappings[0].get("archetype", "unknown")
+                score = field_mappings[0].get("global_score", 0)
+                logging.info(f"[Apply Workflow] Using archetype: {archetype} (score: {score:.2f})")
+
+            # Form filling
+            fill_result = self._fill_form(handler, field_mappings)
+
+            # Final submission
+            if auto_submit:
+                # Auto-submit only if explicitly requested and score is high
+                if self.current_evaluation and self.current_evaluation.global_score >= 4.5:
+                    logging.warning("[Apply Workflow] Auto-submit enabled (not recommended)")
+                    handler.submit_application(self.browser)
+                    return {"status": "submitted", "method": "auto"}
+                else:
+                    logging.info("[Apply Workflow] Auto-submit blocked - score below 4.5 threshold")
+                    self._handle_final_gate(handler, fill_result)
+                    return {"status": "submitted", "method": "hitl"}
+            else:
+                # Default: HITL gate for all submissions
+                self._handle_final_gate(handler, fill_result)
+                return {"status": "submitted", "method": "hitl"}
+
+        except Exception as exc:
+            logging.exception(f"[Apply Workflow] Error: {exc}")
+            self.logger.log_error(session_id=handler.session_id, error=str(exc))
+            return {"status": "error", "error": str(exc)}
+
+    def _get_evaluation_summary(self) -> Optional[Dict[str, Any]]:
+        """Get current evaluation summary for API response."""
+        if not self.current_evaluation:
+            return None
+
+        return {
+            "archetype": self.current_evaluation.archetype.value,
+            "confidence": self.current_evaluation.archetype_confidence,
+            "global_score": self.current_evaluation.global_score,
+            "recommendation": self.current_evaluation.recommendation,
+            "blocks": {
+                k: {"score": v.score, "reasoning": v.reasoning}
+                for k, v in self.current_evaluation.blocks.items()
+            },
+            "cv_tailoring": self.current_evaluation.cv_tailoring_plan,
+            "interview_stories_count": len(self.current_evaluation.interview_stories)
+        }
 
     # --------------------------------------------------------------------------- #
     # 3e️⃣ Form filling (auto + HITL)

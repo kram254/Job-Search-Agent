@@ -1,18 +1,661 @@
-from typing import List, Dict, Any
+import re
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class Archetype(Enum):
+    """Career-ops 6 archetypes for role classification."""
+    AI_PLATFORM_LLMOPS = "ai_platform_llmops"
+    AGENTIC_AUTOMATION = "agentic_automation"
+    TECHNICAL_AI_PM = "technical_ai_pm"
+    AI_SOLUTIONS_ARCHITECT = "ai_solutions_architect"
+    AI_FORWARD_DEPLOYED = "ai_forward_deployed"
+    AI_TRANSFORMATION = "ai_transformation"
+    HYBRID = "hybrid"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class ArchetypeSignals:
+    """Signals for archetype detection from job description."""
+    keywords_found: List[str] = field(default_factory=list)
+    confidence: float = 0.0
+
+
+@dataclass
+class ScoreBlock:
+    """Individual scoring block (A-F dimensions)."""
+    dimension: str
+    score: float
+    max_score: float = 5.0
+    reasoning: str = ""
+    evidence: List[str] = field(default_factory=list)
+
+
+@dataclass
+class JobEvaluation:
+    """Complete A-F evaluation result."""
+    archetype: Archetype
+    archetype_confidence: float
+    hybrid_archetypes: List[Archetype] = field(default_factory=list)
+    blocks: Dict[str, ScoreBlock] = field(default_factory=dict)
+    global_score: float = 0.0
+    recommendation: str = ""
+    cv_tailoring_plan: Dict[str, Any] = field(default_factory=dict)
+    interview_stories: List[Dict[str, Any]] = field(default_factory=list)
+
 
 class FieldMapper:
-    def __init__(self, candidate_profile: Dict[str, Any], job_description: str):
+    """
+    Career-ops inspired field mapper with archetype detection and A-F scoring.
+    Maps form fields and provides comprehensive job evaluation.
+    """
+
+    # Career-ops archetype detection signals
+    ARCHETYPE_SIGNALS = {
+        Archetype.AI_PLATFORM_LLMOPS: [
+            "observability", "evals", "pipelines", "monitoring", "reliability",
+            "llmops", "mlops", "infrastructure", "platform", "scaling"
+        ],
+        Archetype.AGENTIC_AUTOMATION: [
+            "agent", "hitl", "orchestration", "workflow", "multi-agent",
+            "autonomous", "automation", "agentic", "copilot"
+        ],
+        Archetype.TECHNICAL_AI_PM: [
+            "prd", "roadmap", "discovery", "stakeholder", "product manager",
+            "technical pm", "ai pm", "product strategy", "user research"
+        ],
+        Archetype.AI_SOLUTIONS_ARCHITECT: [
+            "architecture", "enterprise", "integration", "design", "systems",
+            "solutions architect", "sa", "enterprise ai", "system design"
+        ],
+        Archetype.AI_FORWARD_DEPLOYED: [
+            "client-facing", "deploy", "prototype", "fast delivery", "field",
+            "forward deployed", "customer engineer", "solutions engineer",
+            "deployment", "on-site", "customer success"
+        ],
+        Archetype.AI_TRANSFORMATION: [
+            "change management", "adoption", "enablement", "transformation",
+            "organizational change", "ai strategy", "digital transformation"
+        ]
+    }
+
+    # Scoring thresholds
+    STRONG_MATCH_THRESHOLD = 4.5
+    GOOD_MATCH_THRESHOLD = 4.0
+    DECENT_MATCH_THRESHOLD = 3.5
+
+    def __init__(self, candidate_profile: Dict[str, Any], job_description: str,
+                 cv_text: str = "", archetype_preferences: Optional[List[str]] = None):
         self.candidate_profile = candidate_profile
-        self.job_description = job_description
+        self.job_description = job_description.lower()
+        self.cv_text = cv_text.lower()
+        self.archetype_preferences = archetype_preferences or []
+        self.evaluation: Optional[JobEvaluation] = None
+
+    def detect_archetype(self) -> Tuple[Archetype, float, List[Archetype]]:
+        """
+        Detect job archetype from description using keyword matching.
+        Returns: (primary_archetype, confidence, hybrid_archetypes)
+        """
+        scores = {}
+        for archetype, signals in self.ARCHETYPE_SIGNALS.items():
+            matches = [s for s in signals if s in self.job_description]
+            score = len(matches) / len(signals) if signals else 0
+            scores[archetype] = ArchetypeSignals(
+                keywords_found=matches,
+                confidence=score
+            )
+
+        sorted_archetypes = sorted(
+            scores.items(),
+            key=lambda x: x[1].confidence,
+            reverse=True
+        )
+
+        primary = sorted_archetypes[0][0] if sorted_archetypes else Archetype.UNKNOWN
+        primary_confidence = sorted_archetypes[0][1].confidence if sorted_archetypes else 0.0
+
+        # Detect hybrid (secondary archetype within 0.15 confidence)
+        hybrid = []
+        if len(sorted_archetypes) > 1:
+            secondary_conf = sorted_archetypes[1][1].confidence
+            if primary_confidence - secondary_conf < 0.15 and secondary_conf > 0.1:
+                hybrid.append(sorted_archetypes[1][0])
+
+        if primary == Archetype.UNKNOWN and hybrid:
+            primary = hybrid[0]
+            hybrid = []
+
+        return primary, primary_confidence, hybrid
+
+    def evaluate_job(self) -> JobEvaluation:
+        """
+        Perform complete A-F evaluation (6-block career-ops scoring).
+        """
+        archetype, arch_confidence, hybrid = self.detect_archetype()
+
+        # Block A: Role Summary
+        block_a = self._evaluate_role_summary(archetype, arch_confidence)
+
+        # Block B: CV Match
+        block_b = self._evaluate_cv_match(archetype)
+
+        # Block C: Level & Strategy
+        block_c = self._evaluate_level_strategy(archetype)
+
+        # Block D: Compensation & Demand (placeholder - requires market data)
+        block_d = self._evaluate_comp_demand()
+
+        # Block E: Personalization Plan
+        block_e = self._evaluate_personalization(archetype)
+
+        # Block F: Interview Plan
+        block_f = self._evaluate_interview_plan(archetype)
+
+        blocks = {
+            "A": block_a,
+            "B": block_b,
+            "C": block_c,
+            "D": block_d,
+            "E": block_e,
+            "F": block_f
+        }
+
+        # Calculate weighted global score
+        weights = {"A": 0.15, "B": 0.30, "C": 0.15, "D": 0.15, "E": 0.10, "F": 0.15}
+        global_score = sum(
+            blocks[k].score * weights[k] for k in blocks
+        )
+
+        # Generate recommendation
+        recommendation = self._generate_recommendation(global_score)
+
+        self.evaluation = JobEvaluation(
+            archetype=archetype,
+            archetype_confidence=arch_confidence,
+            hybrid_archetypes=hybrid,
+            blocks=blocks,
+            global_score=global_score,
+            recommendation=recommendation,
+            cv_tailoring_plan=self._generate_tailoring_plan(archetype),
+            interview_stories=self._generate_interview_stories(archetype)
+        )
+
+        return self.evaluation
+
+    def _evaluate_role_summary(self, archetype: Archetype, confidence: float) -> ScoreBlock:
+        """Block A: Role Summary evaluation."""
+        evidence = [
+            f"Archetype: {archetype.value}",
+            f"Detection confidence: {confidence:.2f}"
+        ]
+
+        # Domain detection
+        domains = ["platform", "agentic", "llmops", "ml", "enterprise"]
+        detected_domain = next((d for d in domains if d in self.job_description), "general")
+
+        # Remote policy
+        remote_score = 0
+        if "remote" in self.job_description:
+            if "fully remote" in self.job_description or "100% remote" in self.job_description:
+                remote_score = 5
+            else:
+                remote_score = 4
+        elif "hybrid" in self.job_description:
+            remote_score = 3
+
+        score = min(5.0, 3.0 + confidence * 2 + remote_score * 0.2)
+
+        return ScoreBlock(
+            dimension="Role Summary (A)",
+            score=round(score, 1),
+            reasoning=f"Detected as {archetype.value} role in {detected_domain} domain",
+            evidence=evidence
+        )
+
+    def _evaluate_cv_match(self, archetype: Archetype) -> ScoreBlock:
+        """Block B: CV Match evaluation."""
+        candidate_skills = self.candidate_profile.get("skills", {})
+        primary_skills = candidate_skills.get("primary", [])
+        secondary_skills = candidate_skills.get("secondary", [])
+
+        # Extract skills from JD
+        jd_skills = self._extract_skills_from_jd()
+
+        # Match skills
+        matched_primary = [s for s in primary_skills if any(s.lower() in jd_s.lower() for jd_s in jd_skills)]
+        matched_secondary = [s for s in secondary_skills if any(s.lower() in jd_s.lower() for jd_s in jd_skills)]
+
+        # Archetype-specific skill prioritization
+        archetype_priority_skills = {
+            Archetype.AI_PLATFORM_LLMOPS: ["python", "llm", "rag", "mlops", "docker"],
+            Archetype.AGENTIC_AUTOMATION: ["python", "agent", "automation", "llm", "mcp"],
+            Archetype.TECHNICAL_AI_PM: ["python", "ai", "product", "stakeholder", "roadmap"],
+            Archetype.AI_SOLUTIONS_ARCHITECT: ["python", "architecture", "cloud", "aws", "azure"],
+            Archetype.AI_FORWARD_DEPLOYED: ["python", "client", "deploy", "prototype", "llm"],
+            Archetype.AI_TRANSFORMATION: ["python", "ai", "strategy", "adoption", "change"]
+        }
+
+        priority_skills = archetype_priority_skills.get(archetype, [])
+        priority_matches = [s for s in matched_primary if any(p in s.lower() for p in priority_skills)]
+
+        # Calculate score
+        coverage = (len(matched_primary) + len(matched_secondary) * 0.5) / max(len(jd_skills), 1)
+        priority_bonus = len(priority_matches) * 0.3
+
+        score = min(5.0, 2.0 + coverage * 2 + priority_bonus)
+
+        evidence = [
+            f"Primary skills matched: {matched_primary}",
+            f"Secondary skills matched: {matched_secondary}",
+            f"Priority skills for {archetype.value}: {priority_matches}"
+        ]
+
+        return ScoreBlock(
+            dimension="CV Match (B)",
+            score=round(score, 1),
+            reasoning=f"Skills coverage: {len(matched_primary)}/{len(jd_skills)} primary, {len(matched_secondary)} secondary",
+            evidence=evidence
+        )
+
+    def _evaluate_level_strategy(self, archetype: Archetype) -> ScoreBlock:
+        """Block C: Level and Strategy evaluation."""
+        # Detect seniority from JD
+        seniority_signals = {
+            "senior": ["senior", "sr.", "staff", "principal", "lead"],
+            "mid": ["mid-level", "mid level", "intermediate"],
+            "junior": ["junior", "jr.", "entry", "associate", "intern"]
+        }
+
+        detected_level = "mid"
+        for level, signals in seniority_signals.items():
+            if any(s in self.job_description for s in signals):
+                detected_level = level
+                break
+
+        # Candidate level from experience
+        years_exp = self._estimate_years_experience()
+
+        level_score = 3.0
+        if detected_level == "senior" and years_exp >= 5:
+            level_score = 4.5
+        elif detected_level == "mid" and years_exp >= 3:
+            level_score = 4.0
+        elif detected_level == "junior" and years_exp < 3:
+            level_score = 4.5
+
+        return ScoreBlock(
+            dimension="Level Strategy (C)",
+            score=round(level_score, 1),
+            reasoning=f"Detected {detected_level} role vs candidate ~{years_exp} years experience",
+            evidence=[f"Job level: {detected_level}", f"Candidate experience: ~{years_exp} years"]
+        )
+
+    def _evaluate_comp_demand(self) -> ScoreBlock:
+        """Block D: Compensation and Demand (placeholder)."""
+        # This would integrate with market data APIs
+        # For now, use JD signals
+        comp_signals = ["competitive", "top", "attractive", "equity", "bonus"]
+        comp_mentions = sum(1 for s in comp_signals if s in self.job_description)
+
+        score = 3.0 + comp_mentions * 0.3
+
+        return ScoreBlock(
+            dimension="Comp & Demand (D)",
+            score=round(min(score, 5.0), 1),
+            reasoning="Based on compensation signals in job description",
+            evidence=[f"Compensation keywords found: {comp_mentions}"]
+        )
+
+    def _evaluate_personalization(self, archetype: Archetype) -> ScoreBlock:
+        """Block E: Personalization Plan."""
+        # Keywords to inject based on archetype
+        archetype_keywords = {
+            Archetype.AI_PLATFORM_LLMOPS: ["observability", "evals", "pipelines", "scaling"],
+            Archetype.AGENTIC_AUTOMATION: ["agents", "orchestration", "workflows", "automation"],
+            Archetype.TECHNICAL_AI_PM: ["product", "roadmap", "stakeholders", "discovery"],
+            Archetype.AI_SOLUTIONS_ARCHITECT: ["architecture", "integration", "enterprise"],
+            Archetype.AI_FORWARD_DEPLOYED: ["deployment", "prototyping", "client-facing"],
+            Archetype.AI_TRANSFORMATION: ["transformation", "adoption", "enablement"]
+        }
+
+        keywords_to_inject = archetype_keywords.get(archetype, [])
+        score = min(5.0, 3.0 + len(keywords_to_inject) * 0.3)
+
+        return ScoreBlock(
+            dimension="Personalization (E)",
+            score=round(score, 1),
+            reasoning=f"Tailoring CV with {len(keywords_to_inject)} archetype-specific keywords",
+            evidence=[f"Keywords to inject: {keywords_to_inject}"]
+        )
+
+    def _evaluate_interview_plan(self, archetype: Archetype) -> ScoreBlock:
+        """Block F: Interview Plan (STAR+R stories)."""
+        # Archetype-specific story themes
+        story_themes = {
+            Archetype.AI_PLATFORM_LLMOPS: [
+                "Built LLMOps pipeline with monitoring",
+                "Reduced model inference latency by 40%",
+                "Implemented eval framework for LLMs"
+            ],
+            Archetype.AGENTIC_AUTOMATION: [
+                "Designed multi-agent workflow system",
+                "Built AI agent with HITL feedback loop",
+                "Automated complex business process with agents"
+            ],
+            Archetype.TECHNICAL_AI_PM: [
+                "Led AI product from concept to launch",
+                "Balanced technical debt with product velocity",
+                "Defined AI product metrics and success criteria"
+            ],
+            Archetype.AI_SOLUTIONS_ARCHITECT: [
+                "Designed enterprise AI integration",
+                "Architected scalable ML system",
+                "Led technical design for AI platform"
+            ],
+            Archetype.AI_FORWARD_DEPLOYED: [
+                "Delivered AI prototype in 2 weeks",
+                "Deployed solution at client site",
+                "Built custom AI solution for enterprise"
+            ],
+            Archetype.AI_TRANSFORMATION: [
+                "Led AI adoption initiative",
+                "Trained 100+ engineers on AI tools",
+                "Drove organizational change for AI"
+            ]
+        }
+
+        themes = story_themes.get(archetype, ["Technical problem solving", "Team collaboration"])
+        score = min(5.0, 3.0 + len(themes) * 0.4)
+
+        return ScoreBlock(
+            dimension="Interview Plan (F)",
+            score=round(score, 1),
+            reasoning=f"Prepared {len(themes)} STAR+R stories for {archetype.value} role",
+            evidence=[f"Story themes: {themes}"]
+        )
+
+    def _extract_skills_from_jd(self) -> List[str]:
+        """Extract skill keywords from job description."""
+        # Common tech skills to look for
+        skill_patterns = [
+            r"python", r"machine learning", r"llm", r"ai", r"ml", r"rag",
+            r"agent", r"automation", r"aws", r"azure", r"gcp", r"docker",
+            r"kubernetes", r"flask", r"django", r"fastapi", r"sql",
+            r"nosql", r"postgres", r"mongodb", r"redis", r"kafka",
+            r"tensorflow", r"pytorch", r"scikit", r"pandas", r"numpy"
+        ]
+
+        found_skills = []
+        for pattern in skill_patterns:
+            if re.search(pattern, self.job_description, re.IGNORECASE):
+                found_skills.append(pattern)
+
+        return found_skills
+
+    def _estimate_years_experience(self) -> int:
+        """Estimate candidate years from CV text."""
+        # Look for year ranges in CV
+        year_patterns = re.findall(r"(20\d{2})\s*-\s*(20\d{2}|present)", self.cv_text, re.IGNORECASE)
+        if year_patterns:
+            total_years = 0
+            for start, end in year_patterns:
+                end_year = 2024 if end.lower() == "present" else int(end)
+                total_years += end_year - int(start)
+            return min(total_years, 15)  # Cap at 15
+        return 5  # Default assumption
+
+    def _generate_recommendation(self, score: float) -> str:
+        """Generate application recommendation based on score."""
+        if score >= self.STRONG_MATCH_THRESHOLD:
+            return "STRONG MATCH: Apply immediately with tailored CV and cover letter"
+        elif score >= self.GOOD_MATCH_THRESHOLD:
+            return "GOOD MATCH: Worth applying with customized materials"
+        elif score >= self.DECENT_MATCH_THRESHOLD:
+            return "DECENT MATCH: Apply if specific reason exists"
+        else:
+            return "NOT RECOMMENDED: Low fit, consider passing"
+
+    def _generate_tailoring_plan(self, archetype: Archetype) -> Dict[str, Any]:
+        """Generate CV tailoring plan based on archetype."""
+        return {
+            "archetype": archetype.value,
+            "summary_rewrite": True,
+            "reorder_experience": True,
+            "inject_keywords": self._get_archetype_keywords(archetype),
+            "highlight_projects": self._get_archetype_projects(archetype)
+        }
+
+    def _generate_interview_stories(self, archetype: Archetype) -> List[Dict[str, Any]]:
+        """Generate interview stories for the archetype."""
+        stories = []
+
+        story_templates = {
+            Archetype.AI_PLATFORM_LLMOPS: [
+                {"situation": "LLM system had no observability", "task": "Build monitoring pipeline",
+                 "action": "Implemented LLMOps with evals and logging", "result": "40% faster debugging",
+                 "reflection": "Should have instrumented from day one"},
+                {"situation": "Model latency too high", "task": "Optimize inference",
+                 "action": "Implemented caching and batching", "result": "Reduced p95 from 2s to 380ms",
+                 "reflection": "Performance testing should be continuous"}
+            ],
+            Archetype.AGENTIC_AUTOMATION: [
+                {"situation": "Manual process taking 20 hours/week", "task": "Automate with AI agents",
+                 "action": "Built multi-agent workflow with HITL", "result": "90% time saved",
+                 "reflection": "Agent reliability requires robust error handling"},
+                {"situation": "Customer service backlogs", "task": "Deploy AI support agent",
+                 "action": "RAG-based agent with human escalation", "result": "80% resolution rate",
+                 "reflection": "HITL design is critical for trust"}
+            ],
+            Archetype.TECHNICAL_AI_PM: [
+                {"situation": "Unclear AI product direction", "task": "Define roadmap",
+                 "action": "Conducted user research and feasibility analysis", "result": "Shipped MVP in 8 weeks",
+                 "reflection": "Technical PMs must balance discovery with delivery"},
+                {"situation": "Engineering-product misalignment", "task": "Bridge communication",
+                 "action": "Created shared metrics and regular syncs", "result": "50% faster releases",
+                 "reflection": "Documentation and process are force multipliers"}
+            ],
+            Archetype.AI_SOLUTIONS_ARCHITECT: [
+                {"situation": "Monolithic AI system failing at scale", "task": "Redesign architecture",
+                 "action": "Designed microservices with event-driven patterns", "result": "10x throughput increase",
+                 "reflection": "Early architecture decisions compound"},
+                {"situation": "Client needed custom AI integration", "task": "Design enterprise solution",
+                 "action": "Architected secure API with on-prem option", "result": "Closed $500K deal",
+                 "reflection": "Enterprise sales cycles require patience"}
+            ],
+            Archetype.AI_FORWARD_DEPLOYED: [
+                {"situation": "Client needed POC in 2 weeks", "task": "Rapid prototype",
+                 "action": "Built working demo with LLM integration", "result": "Won contract",
+                 "reflection": "Working code beats perfect architecture"},
+                {"situation": "Deployment failing at client site", "task": "Debug and fix",
+                 "action": "On-site debugging and rapid iteration", "result": "Production in 3 days",
+                 "reflection": "Client context is irreplaceable"}
+            ],
+            Archetype.AI_TRANSFORMATION: [
+                {"situation": "Engineers resistant to AI tools", "task": "Drive adoption",
+                 "action": "Created training program and success stories", "result": "60% adoption in 3 months",
+                 "reflection": "Change management is 80% psychology"},
+                {"situation": "Leadership skeptical of AI ROI", "task": "Build business case",
+                 "action": "Pilots with measurable metrics", "result": "$2M annual savings identified",
+                 "reflection": "ROI stories must be specific to resonate"}
+            ]
+        }
+
+        return story_templates.get(archetype, [])
+
+    def _get_archetype_keywords(self, archetype: Archetype) -> List[str]:
+        """Get keywords to inject for archetype."""
+        keywords = {
+            Archetype.AI_PLATFORM_LLMOPS: ["LLMOps", "observability", "evals", "pipelines", "scaling"],
+            Archetype.AGENTIC_AUTOMATION: ["AI agents", "orchestration", "HITL", "workflows"],
+            Archetype.TECHNICAL_AI_PM: ["product strategy", "roadmap", "stakeholder management"],
+            Archetype.AI_SOLUTIONS_ARCHITECT: ["enterprise architecture", "systems design", "integration"],
+            Archetype.AI_FORWARD_DEPLOYED: ["rapid prototyping", "client-facing", "deployment"],
+            Archetype.AI_TRANSFORMATION: ["AI adoption", "change management", "enablement"]
+        }
+        return keywords.get(archetype, [])
+
+    def _get_archetype_projects(self, archetype: Archetype) -> List[str]:
+        """Get projects to highlight for archetype."""
+        # Map to candidate's actual projects from profile
+        all_projects = self.candidate_profile.get("projects", [])
+
+        project_priority = {
+            Archetype.AI_PLATFORM_LLMOPS: ["llm pipeline", "monitoring", "evals"],
+            Archetype.AGENTIC_AUTOMATION: ["agent", "automation", "rag"],
+            Archetype.TECHNICAL_AI_PM: ["product", "platform"],
+            Archetype.AI_SOLUTIONS_ARCHITECT: ["architecture", "design"],
+            Archetype.AI_FORWARD_DEPLOYED: ["deploy", "prototype", "client"],
+            Archetype.AI_TRANSFORMATION: ["training", "adoption"]
+        }
+
+        priorities = project_priority.get(archetype, [])
+        # Score projects by relevance
+        scored = []
+        for proj in all_projects:
+            score = sum(1 for p in priorities if p.lower() in proj.lower())
+            scored.append((score, proj))
+
+        scored.sort(reverse=True)
+        return [p for _, p in scored[:3]]
 
     def map_fields(self, inventory: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        # Placeholder for LLM-based field mapping
+        """
+        Map form fields using archetype-aware logic.
+        Integrates with orchestrator's form filling workflow.
+        """
+        if self.evaluation is None:
+            self.evaluate_job()
+
         mappings = []
         for item in inventory:
+            field_id = item.get("id", "unknown")
+            field_type = item.get("type", "text")
+
+            # Determine if field needs HITL based on sensitivity
+            requires_hitl = self._field_requires_hitl(field_id, field_type)
+
+            # Generate value based on field type and archetype
+            candidate_value = self._generate_field_value(
+                field_id, field_type, item.get("label", "")
+            )
+
+            # Calculate confidence based on field type and match quality
+            confidence = self._calculate_field_confidence(
+                field_id, candidate_value, requires_hitl
+            )
+
             mappings.append({
-                "field_id": item.get("id", "unknown"),
-                "candidate_value": "Sample Value",
-                "requires_hitl": False,
-                "confidence": 0.9
+                "field_id": field_id,
+                "candidate_value": candidate_value,
+                "requires_hitl": requires_hitl,
+                "confidence": confidence,
+                "archetype": self.evaluation.archetype.value if self.evaluation else "unknown",
+                "global_score": self.evaluation.global_score if self.evaluation else 0.0
             })
+
         return mappings
+
+    def _field_requires_hitl(self, field_id: str, field_type: str) -> bool:
+        """Determine if field requires human verification."""
+        sensitive_patterns = [
+            "salary", "compensation", "expected", "ssn", "social",
+            "reference", "referral", "diversity", "disability",
+            "veteran", "gender", "race", "ethnicity"
+        ]
+
+        field_lower = field_id.lower()
+        if any(pattern in field_lower for pattern in sensitive_patterns):
+            return True
+
+        if field_type in ["file", "signature"]:
+            return True
+
+        return False
+
+    def _generate_field_value(self, field_id: str, field_type: str, label: str) -> str:
+        """Generate appropriate value for form field."""
+        # Map common fields to candidate profile data
+        field_mappings = {
+            "name": self.candidate_profile.get("personal_details", {}).get("name", ""),
+            "email": self.candidate_profile.get("personal_details", {}).get("email", ""),
+            "phone": self.candidate_profile.get("personal_details", {}).get("phone", {}).get("primary", ""),
+            "linkedin": self.candidate_profile.get("professional_profiles", {}).get("linkedin", ""),
+            "github": self.candidate_profile.get("professional_profiles", {}).get("github", ""),
+            "website": self.candidate_profile.get("professional_profiles", {}).get("medium", ""),
+            "location": "Kenya" if self.candidate_profile.get("work_authorization", {}).get("kenya") == "citizen" else ""
+        }
+
+        # Check direct mappings
+        for key, value in field_mappings.items():
+            if key in field_id.lower() or key in label.lower():
+                return value
+
+        # Handle specific field types
+        if field_type == "select" or "dropdown" in field_id.lower():
+            return self._handle_select_field(field_id, label)
+
+        if "experience" in field_id.lower() or "years" in field_id.lower():
+            return "6+"
+
+        if "salary" in field_id.lower() or "compensation" in field_id.lower():
+            return "__HITL_REQUIRED__"
+
+        # Default for unknown fields
+        return ""
+
+    def _handle_select_field(self, field_id: str, label: str) -> str:
+        """Handle dropdown/select fields with smart defaults."""
+        label_lower = label.lower()
+
+        if "authorization" in label_lower or "visa" in label_lower:
+            return "No sponsorship needed"
+
+        if "remote" in label_lower or "work" in label_lower:
+            return "Remote"
+
+        if "notice" in label_lower or "start" in label_lower:
+            return "2 weeks"
+
+        if "education" in label_lower or "degree" in label_lower:
+            return "Bachelor's"
+
+        return ""
+
+    def _calculate_field_confidence(self, field_id: str, value: str, requires_hitl: bool) -> float:
+        """Calculate confidence score for field mapping."""
+        if requires_hitl:
+            return 0.3
+
+        if not value:
+            return 0.5
+
+        if "__HITL_REQUIRED__" in str(value):
+            return 0.2
+
+        # High confidence for direct profile matches
+        direct_fields = ["name", "email", "phone", "linkedin"]
+        if any(f in field_id.lower() for f in direct_fields):
+            return 0.95
+
+        return 0.8
+
+    def get_evaluation_summary(self) -> Dict[str, Any]:
+        """Get human-readable evaluation summary."""
+        if self.evaluation is None:
+            self.evaluate_job()
+
+        return {
+            "archetype": self.evaluation.archetype.value,
+            "confidence": self.evaluation.archetype_confidence,
+            "global_score": self.evaluation.global_score,
+            "recommendation": self.evaluation.recommendation,
+            "scores": {
+                k: {"score": v.score, "reasoning": v.reasoning}
+                for k, v in self.evaluation.blocks.items()
+            },
+            "cv_tailoring": self.evaluation.cv_tailoring_plan,
+            "interview_stories_count": len(self.evaluation.interview_stories)
+        }
