@@ -23,15 +23,15 @@ import uuid
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
-# Local imports – absolute to support running from the project root
 from agent.platforms.base import BasePlatformHandler
 from agent.platforms.greenhouse import GreenhouseHandler
 from agent.platforms.linkedin import LinkedInHandler
 from agent.platforms.indeed import IndeedHandler
 from agent.llm.field_mapper import FieldMapper, JobEvaluation, Archetype
 from agent.browser.playwright_wrapper import BrowserWrapper
+from agent.browser.form_inventory import FormInventory
 from agent.tracker.logger import Logger
 from agent.services.pdf_generator import PDFGenerator, PDFGenerationResult
 from agent.scanner.portal_scanner import PortalScanner
@@ -254,8 +254,36 @@ class ApplicationOrchestrator:
         # (real logic would live in a dedicated CV‑matching module)
         preferred_pdf = self._pick_preferred_cv()
         logging.info(f"[Session {handler.session_id}] Selected CV: {preferred_pdf}")
-        # Store selection for later file upload
         handler.selected_cv_path = preferred_pdf
+
+    def _pick_preferred_cv(self) -> str:
+        profile = self.candidate_profile
+        pdf_paths = profile.get("cv_variants", {}).get("pdf_paths", [])
+        if pdf_paths:
+            return pdf_paths[0]
+        md_paths = profile.get("cv_variants", {}).get("paths", [])
+        if md_paths:
+            return md_paths[0]
+        default_cv = self.hitl_config.get("default_cv", "CVs/SoftwareDevCV.pdf")
+        return default_cv
+
+    def _fill_single_field(self, field_id: str, value: str) -> None:
+        handler = getattr(self, "current_handler", None)
+        if handler and hasattr(handler, "fill_field"):
+            handler.fill_field(self.browser.page, field_id, value)
+            return
+        try:
+            page = self.browser.page
+            locator = page.locator(f"#{field_id}, [name='{field_id}']")
+            if locator.count() > 0:
+                el = locator.first
+                tag = el.evaluate("el => el.tagName.toLowerCase()")
+                if tag == "select":
+                    el.select_option(label=value)
+                else:
+                    el.fill(str(value))
+        except Exception as e:
+            logging.warning(f"[Orchestrator] _fill_single_field({field_id}): {e}")
 
     # --------------------------------------------------------------------------- #
     # 3c️⃣ Form discovery & inventory
@@ -598,7 +626,7 @@ class ApplicationOrchestrator:
         # After all fields are filled, click the final “Continue/Save” button
         # (handler‑specific helper)
         if hasattr(handler, "click_continue"):
-            handler.click_continue()
+            handler.click_continue(self.browser.page)
             logging.debug("[Session] Clicked 'Continue' after field fill")
 
     # --------------------------------------------------------------------------- #

@@ -17,7 +17,7 @@ from pathlib import Path
 
 # Assuming these imports exist in the project
 from ..browser.playwright_wrapper import BrowserWrapper
-from ..utils.logger import Logger
+from ..tracker.logger import Logger
 
 
 class ScanLevel(Enum):
@@ -147,7 +147,6 @@ class PortalScanner:
             filter_config = config.get("title_filter", {})
             self.title_filter = TitleFilter(
                 positive=filter_config.get("positive", []),
-                negative=filter_config.get("negative", []),
                 negative=filter_config.get("negative", []),
                 seniority_boost=filter_config.get("seniority_boost", [])
             )
