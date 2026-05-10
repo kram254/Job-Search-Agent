@@ -1,0 +1,102 @@
+tracked_companies:
+  - name: Anthropic
+    careers_url: https://job-boards.greenhouse.io/anthropic
+    api: https://boards-api.greenhouse.io/v1/boards/anthropic/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: OpenAI
+    careers_url: https://job-boards.greenhouse.io/openai
+    api: https://boards-api.greenhouse.io/v1/boards/openai/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Cohere
+    careers_url: https://job-boards.greenhouse.io/cohere
+    api: https://boards-api.greenhouse.io/v1/boards/cohere/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Hugging Face
+    careers_url: https://apply.workable.com/hugging-face
+    scan_method: playwright
+    platform: custom
+    enabled: true
+
+  - name: Mistral AI
+    careers_url: https://jobs.lever.co/mistral
+    scan_method: playwright
+    platform: lever
+    enabled: true
+
+  - name: Scale AI
+    careers_url: https://job-boards.greenhouse.io/scaleai
+    api: https://boards-api.greenhouse.io/v1/boards/scaleai/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Weights & Biases
+    careers_url: https://job-boards.greenhouse.io/wandb
+    api: https://boards-api.greenhouse.io/v1/boards/wandb/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Langchain
+    careers_url: https://job-boards.greenhouse.io/langchain
+    api: https://boards-api.greenhouse.io/v1/boards/langchain/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Nvidia
+    careers_url: https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite
+    scan_method: playwright
+    platform: workday
+    enabled: false
+
+title_filter:
+  positive:
+    - engineer
+    - developer
+    - scientist
+    - architect
+    - ml
+    - ai
+    - machine learning
+    - python
+    - backend
+    - platform
+    - agent
+    - llm
+    - automation
+  negative:
+    - intern
+    - director
+    - vp
+    - chief
+    - president
+    - legal
+    - finance
+    - accounting
+    - recruiter
+    - hr
+  seniority_boost:
+    - senior
+    - staff
+    - principal
+    - lead
+
+search_queries:
+  - query: "AI engineer remote"
+    sources: [linkedin, indeed]
+  - query: "LLM engineer python remote"
+    sources: [linkedin, indeed]
+  - query: "agentic AI automation python"
+    sources: [linkedin, indeed]
+  - query: "ML platform engineer remote"
+    sources: [linkedin, indeed]
