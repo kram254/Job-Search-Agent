@@ -62,5 +62,45 @@
     "ssn": "__HITL_REQUIRED__",
     "salary": "__HITL_REQUIRED__",
     "references": "__HITL_REQUIRED__"
-  }
+  },
+  "narrative": {
+    "professional_summary": "AI/ML engineer specializing in agentic systems, LLMOps, and production-grade RAG architectures. I build systems that actually ship — from multi-agent orchestration pipelines to real-time inference infrastructure.",
+    "exit_story": "I'm at a point where I want to go deeper on the infrastructure layer — moving from building agentic features to owning the platform they run on.",
+    "positioning": "The engineer who bridges prototype and production in agentic AI"
+  },
+  "proof_points": [
+    {
+      "metric": "90% reduction in manual processing time",
+      "context": "multi-agent workflow automation",
+      "archetype": "agentic_automation"
+    },
+    {
+      "metric": "p95 latency reduced from 2s to 380ms",
+      "context": "LLM inference optimization with caching",
+      "archetype": "ai_platform_llmops"
+    },
+    {
+      "metric": "Shipped AI POC in 2 weeks",
+      "context": "rapid prototyping for enterprise client",
+      "archetype": "ai_forward_deployed"
+    }
+  ],
+  "compensation_targets": {
+    "target_base": "$120,000",
+    "target_total": "$150,000",
+    "currency": "USD",
+    "notes": "Open to equity-heavy packages at early-stage companies"
+  },
+  "writing_style": {
+    "calibrated": false,
+    "tone": "direct",
+    "vocabulary_level": "technical"
+  },
+  "projects": [
+    "Multi-agent RAG pipeline with HITL",
+    "LLMOps monitoring dashboard",
+    "AI agent for customer support automation",
+    "Real-time inference optimization system",
+    "Agentic code review assistant"
+  ]
 }

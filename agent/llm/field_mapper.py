@@ -1,4 +1,5 @@
 import re
+import time
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
@@ -81,17 +82,40 @@ class FieldMapper:
         ]
     }
 
-    # Scoring thresholds
+    POSTING_EXPIRED_SIGNALS = [
+        "no longer accepting applications", "position has been filled",
+        "this job is no longer available", "application period has closed",
+        "job has expired", "posting has expired", "this position has been closed",
+        "we are no longer accepting", "this job posting has expired"
+    ]
+
+    POSTING_GHOST_SIGNALS = [
+        "confidential company", "company confidential", "undisclosed company",
+        "unnamed client", "our client", "a leading company"
+    ]
+
+    TONE_CHOOSING_PHRASES = [
+        "I'm drawn to {company} specifically because",
+        "What sets this role apart for me is",
+        "I've evaluated several opportunities and",
+        "This role aligns with where I'm intentionally directing my career",
+        "I'm selective about where I invest my energy"
+    ]
+
     STRONG_MATCH_THRESHOLD = 4.5
     GOOD_MATCH_THRESHOLD = 4.0
     DECENT_MATCH_THRESHOLD = 3.5
 
     def __init__(self, candidate_profile: Dict[str, Any], job_description: str,
-                 cv_text: str = "", archetype_preferences: Optional[List[str]] = None):
+                 cv_text: str = "", archetype_preferences: Optional[List[str]] = None,
+                 writing_samples: Optional[List[str]] = None):
         self.candidate_profile = candidate_profile
         self.job_description = job_description.lower()
+        self.job_description_raw = job_description
         self.cv_text = cv_text.lower()
         self.archetype_preferences = archetype_preferences or []
+        self.writing_samples = writing_samples or []
+        self.style_profile: Dict[str, Any] = {}
         self.evaluation: Optional[JobEvaluation] = None
 
     def detect_archetype(self) -> Tuple[Archetype, float, List[Archetype]]:
@@ -154,20 +178,25 @@ class FieldMapper:
         # Block F: Interview Plan
         block_f = self._evaluate_interview_plan(archetype)
 
+        block_g = self.evaluate_posting_legitimacy()
+
         blocks = {
             "A": block_a,
             "B": block_b,
             "C": block_c,
             "D": block_d,
             "E": block_e,
-            "F": block_f
+            "F": block_f,
+            "G": block_g
         }
 
-        # Calculate weighted global score
-        weights = {"A": 0.15, "B": 0.30, "C": 0.15, "D": 0.15, "E": 0.10, "F": 0.15}
+        weights = {"A": 0.14, "B": 0.27, "C": 0.14, "D": 0.14, "E": 0.10, "F": 0.11, "G": 0.10}
         global_score = sum(
             blocks[k].score * weights[k] for k in blocks
         )
+
+        if block_g.score < 2.0:
+            global_score = min(global_score, 2.5)
 
         # Generate recommendation
         recommendation = self._generate_recommendation(global_score)
@@ -376,6 +405,132 @@ class FieldMapper:
             reasoning=f"Prepared {len(themes)} STAR+R stories for {archetype.value} role",
             evidence=[f"Story themes: {themes}"]
         )
+
+    def evaluate_posting_legitimacy(self) -> ScoreBlock:
+        """Block G: Posting Legitimacy detection."""
+        score = 5.0
+        evidence = []
+        flags = []
+
+        jd_lower = self.job_description
+
+        for signal in self.POSTING_EXPIRED_SIGNALS:
+            if signal in jd_lower:
+                flags.append(f"expired_signal: {signal[:40]}")
+                score -= 2.0
+
+        for signal in self.POSTING_GHOST_SIGNALS:
+            if signal in jd_lower:
+                flags.append(f"ghost_signal: {signal[:40]}")
+                score -= 1.5
+
+        has_company = bool(re.search(r'(inc\.|llc|ltd|corp|company|technologies|labs|ai)', jd_lower))
+        if not has_company:
+            flags.append("no_company_entity_detected")
+            score -= 0.5
+
+        has_apply_mechanism = any(kw in jd_lower for kw in [
+            "apply", "submit", "application", "resume", "cv", "cover letter"
+        ])
+        if not has_apply_mechanism:
+            flags.append("no_apply_mechanism")
+            score -= 0.5
+
+        jd_word_count = len(jd_lower.split())
+        if jd_word_count < 50:
+            flags.append(f"thin_description: {jd_word_count} words")
+            score -= 1.0
+        elif jd_word_count > 100:
+            evidence.append(f"substantive_description: {jd_word_count} words")
+
+        score = max(0.0, min(5.0, score))
+
+        if not flags:
+            reasoning = "No legitimacy concerns detected"
+        else:
+            reasoning = f"Legitimacy flags: {', '.join(flags)}"
+
+        return ScoreBlock(
+            dimension="Posting Legitimacy (G)",
+            score=round(score, 1),
+            reasoning=reasoning,
+            evidence=evidence + flags
+        )
+
+    def generate_application_answer(self, question: str, company: str = "") -> str:
+        """Generate application answer using 'I'm choosing you' tone doctrine."""
+        archetype, _, _ = self.detect_archetype()
+        name = self.candidate_profile.get("personal_details", {}).get("name", "The candidate")
+        company_label = company or "your company"
+
+        tone_opener = f"I've been intentional about which opportunities I pursue, and {company_label} stands out."
+
+        if "why" in question.lower() and ("company" in question.lower() or "us" in question.lower() or "here" in question.lower()):
+            return (
+                f"{tone_opener} I'm drawn to the specific work you're doing in "
+                f"{archetype.value.replace('_', ' ')}. Most companies are still early in this space — "
+                f"the caliber of problems here matches exactly where I'm directing my next chapter."
+            )
+
+        if "strength" in question.lower():
+            keywords = self._get_archetype_keywords(archetype)
+            top_kw = ", ".join(keywords[:3]) if keywords else "technical execution"
+            return (
+                f"My core strength is translating complex {top_kw} challenges into shipped systems. "
+                f"I move fast without cutting corners on reliability — that combination is rare and it's "
+                f"what I bring to every team I join."
+            )
+
+        if "weakness" in question.lower():
+            return (
+                f"I set high standards and occasionally push teams harder than they expect. "
+                f"I've learned to channel that into structure — clear goals, measurable milestones, "
+                f"and regular retrospectives — so the energy becomes momentum rather than friction."
+            )
+
+        if "salary" in question.lower() or "compensation" in question.lower():
+            comp = self.candidate_profile.get("compensation_targets", {})
+            target = comp.get("target_base", "")
+            return f"__HITL_REQUIRED__:{target}" if target else "__HITL_REQUIRED__"
+
+        return (
+            f"{tone_opener} Based on my background in {archetype.value.replace('_', ' ')}, "
+            f"I believe I can contribute meaningfully from day one."
+        )
+
+    def calibrate_style(self, writing_samples: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Extract tone and vocabulary profile from writing samples."""
+        samples = writing_samples or self.writing_samples
+        if not samples:
+            return {"calibrated": False, "vocabulary_level": "professional", "tone": "direct"}
+
+        combined = " ".join(samples).lower()
+        word_count = len(combined.split())
+
+        avg_sentence_len = 0
+        sentences = re.split(r'[.!?]+', combined)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        if sentences:
+            avg_sentence_len = sum(len(s.split()) for s in sentences) / len(sentences)
+
+        power_words = ["built", "led", "shipped", "drove", "reduced", "increased",
+                       "architected", "designed", "launched", "scaled", "optimized"]
+        power_word_density = sum(1 for w in power_words if w in combined) / max(word_count / 100, 1)
+
+        hedging_words = ["maybe", "perhaps", "sort of", "kind of", "i think", "i believe",
+                         "might", "possibly", "probably", "somewhat"]
+        hedging_count = sum(1 for w in hedging_words if w in combined)
+
+        self.style_profile = {
+            "calibrated": True,
+            "avg_sentence_length": round(avg_sentence_len, 1),
+            "power_word_density": round(power_word_density, 2),
+            "hedging_count": hedging_count,
+            "tone": "assertive" if hedging_count < 3 else "measured",
+            "vocabulary_level": "technical" if power_word_density > 2 else "professional",
+            "sample_word_count": word_count
+        }
+        return self.style_profile
 
     def _extract_skills_from_jd(self) -> List[str]:
         """Extract skill keywords from job description."""
@@ -647,6 +802,7 @@ class FieldMapper:
         if self.evaluation is None:
             self.evaluate_job()
 
+        posting_legitimacy = self.evaluation.blocks.get("G")
         return {
             "archetype": self.evaluation.archetype.value,
             "confidence": self.evaluation.archetype_confidence,
@@ -657,5 +813,10 @@ class FieldMapper:
                 for k, v in self.evaluation.blocks.items()
             },
             "cv_tailoring": self.evaluation.cv_tailoring_plan,
-            "interview_stories_count": len(self.evaluation.interview_stories)
+            "interview_stories_count": len(self.evaluation.interview_stories),
+            "posting_legitimacy": {
+                "score": posting_legitimacy.score if posting_legitimacy else 5.0,
+                "flags": posting_legitimacy.evidence if posting_legitimacy else []
+            },
+            "style_profile": self.style_profile
         }

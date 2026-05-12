@@ -4,18 +4,31 @@ from pathlib import Path
 from datetime import datetime
 
 class Logger:
-    def __init__(self, logs_dir: Path):
-        self.logs_dir = logs_dir
+    def __init__(self, logs_dir: Path = None):
+        self.logs_dir = logs_dir or Path("data/logs")
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-        
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(self.logs_dir / "agent.log"),
-                logging.StreamHandler()
-            ]
-        )
+        self._logger = logging.getLogger("job_search_agent")
+        if not self._logger.handlers:
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                handlers=[
+                    logging.FileHandler(self.logs_dir / "agent.log"),
+                    logging.StreamHandler()
+                ]
+            )
+
+    def info(self, message: str):
+        self._logger.info(message)
+
+    def warning(self, message: str):
+        self._logger.warning(message)
+
+    def error(self, message: str):
+        self._logger.error(message)
+
+    def debug(self, message: str):
+        self._logger.debug(message)
 
     def log_error(self, session_id: str, error: str):
         error_log = {

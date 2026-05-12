@@ -588,35 +588,85 @@ class PortalScanner:
 
     async def _level2_greenhouse_api_scan(self) -> List[JobListing]:
         """
-        Level 2: Greenhouse API for structured data.
-        Faster than Playwright, but only works for Greenhouse.
+        Level 2: Structured API scan for Greenhouse, Ashby, Lever, and BambooHR.
         """
         listings = []
+        import requests
 
-        greenhouse_companies = [
+        api_companies = [
             c for c in self.companies
-            if c.enabled and c.api_url and c.platform == "greenhouse"
+            if c.enabled and c.platform in ("greenhouse", "ashby", "lever", "bamboohr")
         ]
 
-        for company in greenhouse_companies:
+        for company in api_companies:
             try:
-                import requests
+                if company.platform == "greenhouse" and company.api_url:
+                    response = requests.get(company.api_url, timeout=10)
+                    if response.status_code == 200:
+                        data = response.json()
+                        for job in data.get("jobs", []):
+                            listings.append(JobListing(
+                                title=job.get("title", ""),
+                                company=company.name,
+                                url=job.get("absolute_url", ""),
+                                location=job.get("location", {}).get("name", ""),
+                                detected_via=ScanLevel.GREENHOUSE_API
+                            ))
 
-                response = requests.get(company.api_url, timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
+                elif company.platform == "ashby":
+                    from agent.platforms.ashby import AshbyHandler
+                    slug = AshbyHandler.extract_slug(company.careers_url)
+                    if slug:
+                        handler = AshbyHandler()
+                        postings = handler.fetch_jobs(slug)
+                        for posting in postings:
+                            url = posting.get("externalLink") or f"https://jobs.ashbyhq.com/{slug}/{posting.get('id', '')}"
+                            listings.append(JobListing(
+                                title=posting.get("title", ""),
+                                company=company.name,
+                                url=url,
+                                location=posting.get("locationName", ""),
+                                description=posting.get("descriptionPlain", "")[:500],
+                                detected_via=ScanLevel.GREENHOUSE_API
+                            ))
 
-                    for job in data.get("jobs", []):
-                        listings.append(JobListing(
-                            title=job.get("title", ""),
-                            company=company.name,
-                            url=job.get("absolute_url", ""),
-                            location=job.get("location", {}).get("name", ""),
-                            detected_via=ScanLevel.GREENHOUSE_API
-                        ))
+                elif company.platform == "lever":
+                    import re
+                    match = re.search(r'jobs\.lever\.co/([^/?#]+)', company.careers_url)
+                    if match:
+                        lever_slug = match.group(1)
+                        lever_url = f"https://api.lever.co/v0/postings/{lever_slug}?mode=json"
+                        response = requests.get(lever_url, timeout=10)
+                        if response.status_code == 200:
+                            for job in response.json():
+                                listings.append(JobListing(
+                                    title=job.get("text", ""),
+                                    company=company.name,
+                                    url=job.get("hostedUrl", job.get("applyUrl", "")),
+                                    location=job.get("categories", {}).get("location", ""),
+                                    detected_via=ScanLevel.GREENHOUSE_API
+                                ))
+
+                elif company.platform == "bamboohr":
+                    import re
+                    match = re.search(r'([^/.]+)\.bamboohr\.com', company.careers_url)
+                    if match:
+                        bhr_slug = match.group(1)
+                        bhr_url = f"https://{bhr_slug}.bamboohr.com/careers/list"
+                        response = requests.get(bhr_url, timeout=10, headers={"Accept": "application/json"})
+                        if response.status_code == 200:
+                            data = response.json()
+                            for job in data.get("result", []):
+                                listings.append(JobListing(
+                                    title=job.get("jobOpeningName", ""),
+                                    company=company.name,
+                                    url=f"https://{bhr_slug}.bamboohr.com/careers/{job.get('id', '')}",
+                                    location=job.get("location", {}).get("name", ""),
+                                    detected_via=ScanLevel.GREENHOUSE_API
+                                ))
 
             except Exception as e:
-                self.logger.warning(f"Greenhouse API failed for {company.name}: {e}")
+                self.logger.warning(f"Level 2 API scan failed for {company.name} ({company.platform}): {e}")
 
         return listings
 
@@ -707,47 +757,30 @@ class PortalScanner:
 
     async def _verify_liveness(self, listings: List[JobListing]) -> Tuple[List[JobListing], int]:
         """
-        Verify job is still active (only for WebSearch results).
-        Level 1 & 2 are inherently fresh.
+        Verify job is still active using LivenessChecker.
+        WebSearch results are always checked; Level 1/2 results are spot-checked.
         """
+        from agent.scanner.liveness_checker import LivenessChecker
+        checker = LivenessChecker(timeout=8)
+
         verified = []
         expired = 0
 
         for listing in listings:
-            # Only verify WebSearch results
             if listing.detected_via != ScanLevel.WEBSEARCH:
+                listing.is_active = True
                 verified.append(listing)
                 continue
 
             try:
-                # Quick HEAD request check
-                import requests
-                response = requests.head(listing.url, timeout=5, allow_redirects=True)
-
-                # Check for expired signals
-                final_url = response.url
-                if "error=true" in final_url or response.status_code == 404:
+                is_live, reason = checker.check(listing.url)
+                if is_live:
+                    listing.is_active = True
+                    verified.append(listing)
+                else:
+                    self.logger.info(f"Expired listing ({reason}): {listing.url[:80]}")
                     expired += 1
-                    continue
-
-                # Additional check: try to fetch page
-                page_response = requests.get(listing.url, timeout=5)
-                content = page_response.text.lower()
-
-                expired_signals = [
-                    "no longer available", "position has been filled",
-                    "job has expired", "page not found", "404"
-                ]
-
-                if any(signal in content for signal in expired_signals):
-                    expired += 1
-                    continue
-
-                listing.is_active = True
-                verified.append(listing)
-
             except Exception:
-                # If check fails, assume expired for WebSearch results
                 expired += 1
 
         return verified, expired

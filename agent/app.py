@@ -18,9 +18,11 @@ JOBS_RAW = BASE_DIR / "jobs_raw.json"
 HITL_CONFIG = BASE_DIR / "config" / "hitl_config.json"
 SESSIONS_DIR = BASE_DIR / "data" / "sessions"
 GATES_DIR = BASE_DIR / "data" / "gates"
+DATA_DIR = BASE_DIR / "data"
 
 SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 GATES_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 _sse_clients: list = []
 _sse_lock = threading.Lock()
@@ -342,6 +344,332 @@ def get_job(job_id):
         if not job:
             return jsonify({"error": "Job not found"}), 404
         return jsonify(job)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/liveness', methods=['POST'])
+def liveness():
+    data = request.json or {}
+    url = data.get('url', '')
+    if not url:
+        return jsonify({"error": "Missing url"}), 400
+    try:
+        from agent.scanner.liveness_checker import LivenessChecker
+        checker = LivenessChecker()
+        is_live, reason = checker.check(url)
+        return jsonify({"url": url, "is_live": is_live, "reason": reason})
+    except Exception as e:
+        logging.exception("liveness error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/normalize-statuses', methods=['POST'])
+def normalize_statuses():
+    data = request.json or {}
+    statuses = data.get('statuses', [])
+    if not statuses:
+        return jsonify({"error": "Provide statuses list"}), 400
+    try:
+        from agent.tracker.status_machine import StatusMachine
+        sm = StatusMachine()
+        normalized = [{"raw": s, "canonical": sm.normalize(s), "description": sm.describe(s)} for s in statuses]
+        return jsonify({"normalized": normalized})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/story-bank', methods=['GET'])
+def list_stories():
+    archetype = request.args.get('archetype')
+    tags = request.args.getlist('tag')
+    limit = int(request.args.get('limit', 20))
+    try:
+        from agent.tracker.story_bank import StoryBank
+        bank = StoryBank(storage_path=str(DATA_DIR / "story_bank.json"))
+        stories = bank.lookup(archetype=archetype or None, tags=tags or None, limit=limit)
+        return jsonify({"stories": stories, "stats": bank.stats()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/story-bank', methods=['POST'])
+def add_story():
+    data = request.json or {}
+    try:
+        from agent.tracker.story_bank import StoryBank
+        bank = StoryBank(storage_path=str(DATA_DIR / "story_bank.json"))
+        story_id = bank.append(data)
+        return jsonify({"story_id": story_id, "status": "added"})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/pipeline', methods=['GET'])
+def list_pipeline():
+    try:
+        from agent.pipeline.pipeline_manager import PipelineManager
+        pm = PipelineManager(pipeline_path=str(DATA_DIR / "pipeline.json"))
+        return jsonify({"entries": pm.all(), "stats": pm.stats()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/pipeline', methods=['POST'])
+def add_to_pipeline():
+    data = request.json or {}
+    if isinstance(data, list):
+        items = data
+    else:
+        items = [data] if data.get('url') else data.get('items', [])
+
+    if not items:
+        return jsonify({"error": "Provide url or items list"}), 400
+
+    try:
+        from agent.pipeline.pipeline_manager import PipelineManager
+        pm = PipelineManager(pipeline_path=str(DATA_DIR / "pipeline.json"))
+        ids = pm.add_batch(items)
+        return jsonify({"added": len(ids), "ids": ids})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/pipeline/process', methods=['POST'])
+def process_pipeline():
+    data = request.json or {}
+    limit = int(data.get('limit', 10))
+    try:
+        from agent.pipeline.pipeline_manager import PipelineManager
+        from agent.llm.field_mapper import FieldMapper
+
+        pm = PipelineManager(pipeline_path=str(DATA_DIR / "pipeline.json"))
+        pending = pm.get_pending(limit=limit)
+
+        orch = get_orchestrator()
+        processed = []
+
+        for entry in pending:
+            pm.mark_processing(entry["id"])
+            try:
+                jd = entry.get("metadata", {}).get("description", entry.get("title", ""))
+                mapper = FieldMapper(
+                    candidate_profile=orch.candidate_profile,
+                    job_description=jd
+                )
+                summary = mapper.get_evaluation_summary()
+                pm.mark_done(entry["id"], result=summary)
+                processed.append({"id": entry["id"], "status": "done", "score": summary.get("global_score")})
+            except Exception as e:
+                pm.mark_failed(entry["id"], error=str(e))
+                processed.append({"id": entry["id"], "status": "failed", "error": str(e)})
+
+        _broadcast_event("pipeline_processed", {"count": len(processed)})
+        return jsonify({"processed": len(processed), "results": processed})
+    except Exception as e:
+        logging.exception("pipeline/process error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/batch', methods=['POST'])
+def batch_evaluate():
+    data = request.json or {}
+    items = data.get('items', [])
+    batch_id = data.get('batch_id')
+
+    if not items:
+        return jsonify({"error": "Provide items list"}), 400
+
+    try:
+        from agent.batch.batch_processor import BatchProcessor
+        from agent.llm.field_mapper import FieldMapper
+
+        orch = get_orchestrator()
+
+        def evaluate_item(item: dict) -> dict:
+            jd = item.get("description", item.get("title", ""))
+            mapper = FieldMapper(
+                candidate_profile=orch.candidate_profile,
+                job_description=jd
+            )
+            return mapper.get_evaluation_summary()
+
+        processor = BatchProcessor(state_path=str(DATA_DIR / "batch_state.json"))
+        summary = processor.process(items, evaluate_item, batch_id=batch_id)
+        return jsonify(summary)
+    except Exception as e:
+        logging.exception("batch error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/follow-ups', methods=['GET'])
+def list_followups():
+    try:
+        from agent.tracker.followup_tracker import FollowUpTracker
+        tracker = FollowUpTracker(storage_path=str(DATA_DIR / "followups.json"))
+        due = tracker.get_due()
+        return jsonify({"due": due, "stats": tracker.stats(), "active": tracker.all_active()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/follow-ups', methods=['POST'])
+def track_followup():
+    data = request.json or {}
+    job_id = data.get('job_id')
+    company = data.get('company', '')
+    title = data.get('title', '')
+    if not job_id:
+        return jsonify({"error": "Missing job_id"}), 400
+    try:
+        from agent.tracker.followup_tracker import FollowUpTracker
+        tracker = FollowUpTracker(storage_path=str(DATA_DIR / "followups.json"))
+        record_id = tracker.track(
+            job_id=job_id,
+            company=company,
+            title=title,
+            applied_at=data.get('applied_at'),
+            contact_name=data.get('contact_name', ''),
+            archetype=data.get('archetype', '')
+        )
+        return jsonify({"record_id": record_id, "status": "tracking"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/analytics/overview', methods=['GET'])
+def analytics_overview():
+    try:
+        from agent.analytics.pattern_analyzer import PatternAnalyzer
+        analyzer = PatternAnalyzer(
+            sessions_dir=str(SESSIONS_DIR),
+            jobs_raw_path=str(JOBS_RAW)
+        )
+        return jsonify(analyzer.overview())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/analytics/patterns', methods=['GET'])
+def analytics_patterns():
+    try:
+        from agent.analytics.pattern_analyzer import PatternAnalyzer
+        analyzer = PatternAnalyzer(
+            sessions_dir=str(SESSIONS_DIR),
+            jobs_raw_path=str(JOBS_RAW)
+        )
+        return jsonify({
+            "conversion_by_score_band": analyzer.conversion_by_score_band(),
+            "rejection_by_archetype": analyzer.rejection_by_archetype(),
+            "top_companies_by_response": analyzer.top_companies_by_response(),
+            "score_vs_outcome_correlation": analyzer.score_vs_outcome_correlation()
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/calibrate-style', methods=['POST'])
+def calibrate_style():
+    data = request.json or {}
+    samples = data.get('writing_samples', [])
+    if not samples:
+        return jsonify({"error": "Provide writing_samples list"}), 400
+    try:
+        from agent.llm.field_mapper import FieldMapper
+        mapper = FieldMapper(
+            candidate_profile={},
+            job_description="",
+            writing_samples=samples
+        )
+        profile = mapper.calibrate_style(samples)
+        return jsonify(profile)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/deep-research', methods=['POST'])
+def deep_research():
+    data = request.json or {}
+    job_description = data.get('job_description', '')
+    company = data.get('company', '')
+    if not job_description:
+        return jsonify({"error": "Provide job_description"}), 400
+    try:
+        from agent.llm.field_mapper import FieldMapper
+        orch = get_orchestrator()
+        mapper = FieldMapper(
+            candidate_profile=orch.candidate_profile,
+            job_description=job_description
+        )
+        evaluation = mapper.evaluate_job()
+        summary = mapper.get_evaluation_summary()
+
+        archetype_keywords = mapper._get_archetype_keywords(evaluation.archetype)
+        stories = evaluation.interview_stories
+
+        research_output = {
+            "archetype": summary["archetype"],
+            "confidence": summary["confidence"],
+            "global_score": summary["global_score"],
+            "recommendation": summary["recommendation"],
+            "scores": summary["scores"],
+            "posting_legitimacy": summary.get("posting_legitimacy"),
+            "cv_tailoring": summary["cv_tailoring"],
+            "archetype_keywords": archetype_keywords,
+            "interview_stories": stories,
+            "application_answer_why": mapper.generate_application_answer(
+                "Why do you want to work here?", company=company
+            ),
+            "application_answer_strength": mapper.generate_application_answer(
+                "What is your greatest strength?", company=company
+            )
+        }
+        return jsonify(research_output)
+    except Exception as e:
+        logging.exception("deep-research error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/outreach', methods=['POST'])
+def outreach():
+    data = request.json or {}
+    job_id = data.get('job_id', '')
+    company = data.get('company', '')
+    contact_name = data.get('contact_name', 'Hiring Manager')
+    platform = data.get('platform', 'linkedin')
+    archetype = data.get('archetype', 'AI Engineering')
+
+    try:
+        orch = get_orchestrator()
+        name = orch.candidate_profile.get("personal_details", {}).get("name", "")
+
+        if platform == "linkedin":
+            message = (
+                f"Hi {contact_name},\n\n"
+                f"I came across the {data.get('title', 'role')} at {company} and it immediately caught my attention. "
+                f"I've been building in {archetype} and the problems your team is solving align directly with "
+                f"where I've been focusing my work.\n\n"
+                f"I'd love to connect briefly to learn more about the team. Would you be open to a quick chat?\n\n"
+                f"Best,\n{name}"
+            )
+        else:
+            message = (
+                f"Hi {contact_name},\n\n"
+                f"I'm reaching out regarding the {data.get('title', 'position')} at {company}. "
+                f"My background in {archetype} maps closely to what you're building.\n\n"
+                f"Happy to share more. Let me know if a brief call makes sense.\n\n"
+                f"Best,\n{name}"
+            )
+
+        return jsonify({
+            "platform": platform,
+            "contact": contact_name,
+            "company": company,
+            "message": message,
+            "character_count": len(message)
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

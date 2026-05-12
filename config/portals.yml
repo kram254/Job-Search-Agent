@@ -28,7 +28,7 @@ tracked_companies:
 
   - name: Mistral AI
     careers_url: https://jobs.lever.co/mistral
-    scan_method: playwright
+    scan_method: lever_api
     platform: lever
     enabled: true
 
@@ -59,6 +59,230 @@ tracked_companies:
     platform: workday
     enabled: false
 
+  - name: ElevenLabs
+    careers_url: https://jobs.ashbyhq.com/elevenlabs
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Hume AI
+    careers_url: https://jobs.ashbyhq.com/hume
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Vapi
+    careers_url: https://jobs.ashbyhq.com/vapi
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Deepgram
+    careers_url: https://job-boards.greenhouse.io/deepgram
+    api: https://boards-api.greenhouse.io/v1/boards/deepgram/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Ada
+    careers_url: https://job-boards.greenhouse.io/ada
+    api: https://boards-api.greenhouse.io/v1/boards/ada/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Sierra
+    careers_url: https://jobs.ashbyhq.com/sierra
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Gong
+    careers_url: https://job-boards.greenhouse.io/gong
+    api: https://boards-api.greenhouse.io/v1/boards/gong/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Langfuse
+    careers_url: https://jobs.ashbyhq.com/langfuse
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: n8n
+    careers_url: https://jobs.lever.co/n8n
+    scan_method: lever_api
+    platform: lever
+    enabled: true
+
+  - name: Retool
+    careers_url: https://jobs.ashbyhq.com/retool
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Arize AI
+    careers_url: https://jobs.ashbyhq.com/arize
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Linear
+    careers_url: https://jobs.ashbyhq.com/linear
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Brex
+    careers_url: https://jobs.ashbyhq.com/brex
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Replit
+    careers_url: https://job-boards.greenhouse.io/replit
+    api: https://boards-api.greenhouse.io/v1/boards/replit/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Perplexity AI
+    careers_url: https://job-boards.greenhouse.io/perplexityai
+    api: https://boards-api.greenhouse.io/v1/boards/perplexityai/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Cursor
+    careers_url: https://jobs.ashbyhq.com/cursor
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Cognition AI
+    careers_url: https://jobs.ashbyhq.com/cognition
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Vercel
+    careers_url: https://jobs.ashbyhq.com/vercel
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Together AI
+    careers_url: https://jobs.lever.co/togetherai
+    scan_method: lever_api
+    platform: lever
+    enabled: true
+
+  - name: Fireworks AI
+    careers_url: https://jobs.lever.co/fireworks
+    scan_method: lever_api
+    platform: lever
+    enabled: true
+
+  - name: Modal
+    careers_url: https://jobs.ashbyhq.com/modal
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Runway ML
+    careers_url: https://job-boards.greenhouse.io/runwayml
+    api: https://boards-api.greenhouse.io/v1/boards/runwayml/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Midjourney
+    careers_url: https://jobs.lever.co/midjourney
+    scan_method: lever_api
+    platform: lever
+    enabled: true
+
+  - name: Stability AI
+    careers_url: https://jobs.lever.co/stability-ai
+    scan_method: lever_api
+    platform: lever
+    enabled: true
+
+  - name: Glean
+    careers_url: https://job-boards.greenhouse.io/glean
+    api: https://boards-api.greenhouse.io/v1/boards/glean/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Coda
+    careers_url: https://jobs.lever.co/coda
+    scan_method: lever_api
+    platform: lever
+    enabled: true
+
+  - name: Imbue
+    careers_url: https://jobs.lever.co/imbue
+    scan_method: lever_api
+    platform: lever
+    enabled: true
+
+  - name: Pika Labs
+    careers_url: https://jobs.ashbyhq.com/pika
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Character AI
+    careers_url: https://job-boards.greenhouse.io/characterai
+    api: https://boards-api.greenhouse.io/v1/boards/characterai/jobs
+    scan_method: greenhouse_api
+    platform: greenhouse
+    enabled: true
+
+  - name: Inflection AI
+    careers_url: https://jobs.lever.co/inflectionai
+    scan_method: lever_api
+    platform: lever
+    enabled: true
+
+  - name: Adept AI
+    careers_url: https://jobs.lever.co/adept
+    scan_method: lever_api
+    platform: lever
+    enabled: true
+
+  - name: Luma AI
+    careers_url: https://jobs.ashbyhq.com/luma
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Twelve Labs
+    careers_url: https://jobs.ashbyhq.com/twelve-labs
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Galileo
+    careers_url: https://jobs.ashbyhq.com/galileo
+    scan_method: ashby_api
+    platform: ashby
+    enabled: true
+
+  - name: Weights Biases (W&B)
+    careers_url: https://jobs.lever.co/wandb
+    scan_method: lever_api
+    platform: lever
+    enabled: false
+
+  - name: Hugging Face (Lever)
+    careers_url: https://jobs.lever.co/huggingface
+    scan_method: lever_api
+    platform: lever
+    enabled: false
+
 title_filter:
   positive:
     - engineer
@@ -74,6 +298,13 @@ title_filter:
     - agent
     - llm
     - automation
+    - llmops
+    - mlops
+    - agentic
+    - inference
+    - model
+    - research
+    - generative
   negative:
     - intern
     - director
@@ -85,11 +316,15 @@ title_filter:
     - accounting
     - recruiter
     - hr
+    - janitor
+    - cook
+    - driver
   seniority_boost:
     - senior
     - staff
     - principal
     - lead
+    - head of
 
 search_queries:
   - query: "AI engineer remote"
@@ -99,4 +334,8 @@ search_queries:
   - query: "agentic AI automation python"
     sources: [linkedin, indeed]
   - query: "ML platform engineer remote"
+    sources: [linkedin, indeed]
+  - query: "LLMOps engineer observability"
+    sources: [linkedin, indeed]
+  - query: "AI forward deployed engineer"
     sources: [linkedin, indeed]

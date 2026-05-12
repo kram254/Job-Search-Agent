@@ -262,22 +262,38 @@ class PDFGenerator:
         """
         tailored = sections.copy()
 
-        # Rewrite professional summary with keyword injection
-        if sections.get("professional_summary"):
+        narrative = profile.get("narrative", {})
+        proof_points = profile.get("proof_points", [])
+        narrative_summary = narrative.get("professional_summary", "")
+
+        if narrative_summary and not sections.get("professional_summary"):
+            tailored["professional_summary"] = narrative_summary
+        elif sections.get("professional_summary"):
             tailored["professional_summary"] = self._rewrite_summary(
-                sections["professional_summary"], keywords, archetype
+                sections["professional_summary"], keywords, archetype,
+                narrative_summary=narrative_summary
             )
 
-        # Generate core competencies section
+        archetype_proof = [p for p in proof_points if p.get("archetype") == archetype]
+        if not archetype_proof:
+            archetype_proof = proof_points
+
+        if archetype_proof and tailored.get("professional_summary"):
+            hero_metrics = "; ".join(
+                f"{p['metric']} ({p['context']})" for p in archetype_proof[:2]
+            )
+            tailored["professional_summary"] = (
+                tailored["professional_summary"].rstrip(".") +
+                f" Key results: {hero_metrics}."
+            )
+
         tailored["core_competencies"] = self._generate_competencies(keywords, archetype)
 
-        # Reorder experience bullets to prioritize matching keywords
         if sections.get("work_experience"):
             tailored["work_experience"] = self._prioritize_experience(
                 sections["work_experience"], keywords
             )
 
-        # Select top projects based on archetype
         if sections.get("projects"):
             tailored["projects"] = self._select_projects(
                 sections["projects"], archetype, keywords
@@ -285,7 +301,8 @@ class PDFGenerator:
 
         return tailored
 
-    def _rewrite_summary(self, summary: str, keywords: List[str], archetype: str) -> str:
+    def _rewrite_summary(self, summary: str, keywords: List[str], archetype: str,
+                          narrative_summary: str = "") -> str:
         """
         Rewrite professional summary injecting relevant keywords.
         Ethical reformulation - only restate existing skills.
@@ -300,7 +317,9 @@ class PDFGenerator:
             if any(self._is_similar(keyword.lower(), skill.lower()) for skill in existing_skills):
                 injectable.append(keyword)
 
-        # Archetype-specific framing
+        if narrative_summary and len(narrative_summary) > 50:
+            summary = narrative_summary + " " + summary if summary else narrative_summary
+
         archetype_openers = {
             "ai_platform_llmops": "ML Engineer specializing in LLMOps, observability, and production AI systems.",
             "agentic_automation": "AI Engineer focused on building autonomous agents and intelligent automation systems.",
@@ -310,7 +329,6 @@ class PDFGenerator:
             "ai_transformation": "AI Transformation Lead driving organizational adoption and AI strategy."
         }
 
-        # If archetype opener matches, prepend it
         opener = archetype_openers.get(archetype, "")
         if opener and not summary.lower().startswith(opener.lower()[:20]):
             summary = opener + " " + summary
