@@ -61,18 +61,133 @@ def health():
 
 @app.route('/apply', methods=['POST'])
 def apply():
-    data = request.json
+    data = request.json or {}
     job_id = data.get('job_id')
     apply_url = data.get('apply_url')
+    mode = data.get('mode', 'draft')
+    cv_path = data.get('cv_path', 'cv.md')
 
     if not job_id or not apply_url:
         return jsonify({"error": "Missing job_id or apply_url"}), 400
 
     try:
         orch = get_orchestrator()
-        orch.start_application(job_id, apply_url)
-        return jsonify({"status": "application_started", "job_id": job_id})
+        result = orch.run_apply_mode(job_id=job_id, apply_url=apply_url, cv_path=cv_path, mode=mode)
+        return jsonify(result)
     except Exception as e:
+        logging.exception("apply error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/apply-from-url', methods=['POST'])
+def apply_from_url():
+    data = request.json or {}
+    url = data.get('url')
+    mode = data.get('mode', 'draft')
+    cv_path = data.get('cv_path', 'cv.md')
+    title = data.get('title', '')
+    company = data.get('company', '')
+
+    if not url:
+        return jsonify({"error": "Missing url"}), 400
+
+    try:
+        orch = get_orchestrator()
+        result = orch.start_from_url(
+            apply_url=url,
+            mode=mode,
+            cv_path=cv_path,
+            title=title,
+            company=company
+        )
+        _broadcast_event("application_started", {"url": url, "mode": mode, "status": result.get("status")})
+        return jsonify(result)
+    except Exception as e:
+        logging.exception("apply-from-url error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/sessions/<session_id>/submit', methods=['POST'])
+def submit_draft_session(session_id):
+    try:
+        orch = get_orchestrator()
+        result = orch.submit_draft(session_id)
+        if result.get("status") == "error":
+            return jsonify(result), 400
+        _broadcast_event("draft_submitted", {"session_id": session_id})
+        return jsonify(result)
+    except Exception as e:
+        logging.exception("submit draft error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/schedule', methods=['GET'])
+def list_schedules():
+    try:
+        from agent.scheduler.scan_scheduler import ScanScheduler
+        scheduler = ScanScheduler(schedule_path=str(DATA_DIR / "schedule.json"))
+        schedules = scheduler.get_schedules()
+        due = scheduler.get_due()
+        return jsonify({"schedules": schedules, "due_count": len(due)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/schedule', methods=['POST'])
+def create_schedule():
+    data = request.json or {}
+    cv_path = data.get('cv_path', 'cv.md')
+    interval_days = int(data.get('interval_days', 2))
+    role_keywords = data.get('role_keywords', [])
+    config_path = data.get('config_path', 'config/portals.yml')
+    label = data.get('label', '')
+
+    try:
+        from agent.scheduler.scan_scheduler import ScanScheduler
+        scheduler = ScanScheduler(schedule_path=str(DATA_DIR / "schedule.json"))
+        schedule_id = scheduler.add_schedule(
+            cv_path=cv_path,
+            interval_days=interval_days,
+            role_keywords=role_keywords,
+            config_path=config_path,
+            label=label
+        )
+        return jsonify({"schedule_id": schedule_id, "status": "created", "interval_days": interval_days})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/schedule/<schedule_id>', methods=['DELETE'])
+def delete_schedule(schedule_id):
+    try:
+        from agent.scheduler.scan_scheduler import ScanScheduler
+        scheduler = ScanScheduler(schedule_path=str(DATA_DIR / "schedule.json"))
+        removed = scheduler.remove(schedule_id)
+        if not removed:
+            return jsonify({"error": "Schedule not found"}), 404
+        return jsonify({"status": "removed", "schedule_id": schedule_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/schedule/<schedule_id>/run', methods=['POST'])
+def run_schedule_now(schedule_id):
+    try:
+        from agent.scheduler.scan_scheduler import ScanScheduler
+        scheduler = ScanScheduler(schedule_path=str(DATA_DIR / "schedule.json"))
+        schedules = scheduler.get_schedules()
+        target = next((s for s in schedules if s["id"] == schedule_id), None)
+        if not target:
+            return jsonify({"error": "Schedule not found"}), 404
+
+        orch = get_orchestrator()
+        result = scheduler._run_schedule(target, orch.candidate_profile, str(JOBS_RAW))
+        scheduler.mark_ran(schedule_id)
+
+        _broadcast_event("scan_complete", {"schedule_id": schedule_id, **result})
+        return jsonify({"schedule_id": schedule_id, "status": "ran", "result": result})
+    except Exception as e:
+        logging.exception("schedule run error")
         return jsonify({"error": str(e)}), 500
 
 
