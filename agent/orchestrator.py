@@ -36,6 +36,9 @@ from agent.tracker.logger import Logger
 from agent.services.pdf_generator import PDFGenerator, PDFGenerationResult
 from agent.scanner.portal_scanner import PortalScanner
 
+APPLICATION_MODE_AUTO = "auto"
+APPLICATION_MODE_DRAFT = "draft"
+
 # --------------------------------------------------------------------------- #
 # Configuration & constants
 # --------------------------------------------------------------------------- #
@@ -339,9 +342,43 @@ class ApplicationOrchestrator:
         logging.debug(f"[Session] Mapped fields: {mappings[:3]}")
         return mappings
 
+    def start_from_url(self, apply_url: str, mode: str = APPLICATION_MODE_DRAFT,
+                       cv_path: str = "cv.md", title: str = "",
+                       company: str = "") -> Dict[str, Any]:
+        synthetic_id = f"url_{abs(hash(apply_url)) % 10000000000}"
+        job_meta = {
+            "id": synthetic_id,
+            "title": title or "Unknown Role",
+            "company": company or self._extract_company_from_url(apply_url),
+            "description": "",
+            "applyUrl": apply_url,
+            "url": apply_url
+        }
+        existing = next((j for j in self.jobs_raw if j.get("url") == apply_url), None)
+        if existing:
+            job_meta = existing
+        else:
+            self.jobs_raw.append(job_meta)
+        return self.run_apply_mode(
+            job_id=job_meta["id"],
+            apply_url=apply_url,
+            cv_path=cv_path,
+            mode=mode
+        )
+
+    def _extract_company_from_url(self, url: str) -> str:
+        try:
+            parts = url.split("/")
+            host = parts[2] if len(parts) > 2 else ""
+            host = host.replace("www.", "").replace("jobs.", "").replace("careers.", "")
+            return host.split(".")[0].title()
+        except Exception:
+            return "Unknown"
+
     def run_apply_mode(self, job_id: str, apply_url: str,
                        cv_path: str = "cv.md",
-                       auto_submit: bool = False) -> Dict[str, Any]:
+                       auto_submit: bool = False,
+                       mode: str = APPLICATION_MODE_DRAFT) -> Dict[str, Any]:
         """
         Career-ops inspired apply mode with full evaluation pipeline.
 
@@ -370,16 +407,12 @@ class ApplicationOrchestrator:
         # Step 1: Evaluate job (archetype detection + A-F scoring)
         self._evaluate_job_for_apply(job_description, cv_path)
 
-        # Check if job is worth applying to
-        if self.current_evaluation and self.current_evaluation.global_score < 3.5:
-            logging.warning(f"[Apply Mode] Low match score ({self.current_evaluation.global_score:.1f}), skipping")
-            return {
-                "session_id": session_id,
-                "job_id": job_id,
-                "status": "skipped",
-                "reason": f"Low match score: {self.current_evaluation.global_score:.1f}",
-                "evaluation": self.current_evaluation
-            }
+        resolved_mode = mode if mode in (APPLICATION_MODE_AUTO, APPLICATION_MODE_DRAFT) else APPLICATION_MODE_DRAFT
+        if auto_submit:
+            resolved_mode = APPLICATION_MODE_AUTO
+
+        if resolved_mode == APPLICATION_MODE_DRAFT and self.current_evaluation and self.current_evaluation.global_score < 3.5:
+            logging.warning(f"[Apply Mode] Low match score ({self.current_evaluation.global_score:.1f}), continuing as draft")
 
         # Step 2 & 3: Generate tailored CV PDF
         try:
@@ -410,18 +443,22 @@ class ApplicationOrchestrator:
         if self.tailored_cv_path:
             handler.selected_cv_path = self.tailored_cv_path
 
-        # Run workflow with optional auto-submit
-        result = self._run_apply_workflow(handler, final_url, auto_submit)
+        result = self._run_apply_workflow(handler, final_url, resolved_mode)
 
         return {
             "session_id": session_id,
             "job_id": job_id,
             "status": result.get("status", "unknown"),
+            "mode": resolved_mode,
             "evaluation": self._get_evaluation_summary(),
             "interview_prep": interview_prep,
             "cv_path": self.tailored_cv_path,
             "company": company_name,
-            "archetype": self.current_evaluation.archetype.value if self.current_evaluation else "unknown"
+            "archetype": self.current_evaluation.archetype.value if self.current_evaluation else "unknown",
+            "draft_screenshot": result.get("draft_screenshot"),
+            "draft_session_path": result.get("draft_session_path"),
+            "fields_filled": result.get("fields_filled", 0),
+            "fields_skipped": result.get("fields_skipped", 0)
         }
 
     def _evaluate_job_for_apply(self, job_description: str, cv_path: str) -> None:
@@ -520,53 +557,104 @@ class ApplicationOrchestrator:
         return recommendations.get(archetype, ["Prepare general technical and behavioral questions"])
 
     def _run_apply_workflow(self, handler: BasePlatformHandler,
-                           url: str, auto_submit: bool) -> Dict[str, str]:
-        """
-        Run the apply workflow with optional auto-submit.
-        Career-ops: No auto-submission by default (HITL required).
-        """
+                           url: str, mode: str = APPLICATION_MODE_DRAFT) -> Dict[str, Any]:
         try:
-            # Login handling
             self._handle_login(handler)
-
-            # CV selection (use tailored CV if available)
             self._handle_cv_selection(handler)
 
-            # Form discovery
             inventory = self._discover_form_inventory()
             logging.info(f"[Apply Workflow] Discovered {len(inventory)} form fields")
 
-            # Field mapping with evaluation context
             field_mappings = self._map_fields(inventory)
 
-            # Log archetype info in mappings
             if field_mappings:
                 archetype = field_mappings[0].get("archetype", "unknown")
                 score = field_mappings[0].get("global_score", 0)
-                logging.info(f"[Apply Workflow] Using archetype: {archetype} (score: {score:.2f})")
+                logging.info(f"[Apply Workflow] archetype={archetype} score={score:.2f} mode={mode}")
 
-            # Form filling
-            fill_result = self._fill_form(handler, field_mappings)
+            fill_result = self._fill_form(handler, field_mappings, mode=mode)
 
-            # Final submission
-            if auto_submit:
-                # Auto-submit only if explicitly requested and score is high
-                if self.current_evaluation and self.current_evaluation.global_score >= 4.5:
-                    logging.warning("[Apply Workflow] Auto-submit enabled (not recommended)")
-                    handler.submit_application(self.browser)
-                    return {"status": "submitted", "method": "auto"}
-                else:
-                    logging.info("[Apply Workflow] Auto-submit blocked - score below 4.5 threshold")
-                    self._handle_final_gate(handler, fill_result)
-                    return {"status": "submitted", "method": "hitl"}
-            else:
-                # Default: HITL gate for all submissions
-                self._handle_final_gate(handler, fill_result)
-                return {"status": "submitted", "method": "hitl"}
+            if mode == APPLICATION_MODE_AUTO:
+                logging.info("[Apply Workflow] Auto mode — submitting application")
+                handler.submit_application(self.browser)
+                return {
+                    "status": "submitted",
+                    "method": "auto",
+                    "fields_filled": fill_result.get("filled", 0),
+                    "fields_skipped": fill_result.get("skipped", 0)
+                }
+
+            screenshot_path = self._save_draft_screenshot(handler.session_id)
+            draft_session_path = self._save_draft_session(handler.session_id, field_mappings, fill_result)
+            return {
+                "status": "draft_saved",
+                "method": "draft",
+                "draft_screenshot": screenshot_path,
+                "draft_session_path": draft_session_path,
+                "fields_filled": fill_result.get("filled", 0),
+                "fields_skipped": fill_result.get("skipped", 0)
+            }
 
         except Exception as exc:
             logging.exception(f"[Apply Workflow] Error: {exc}")
             self.logger.log_error(session_id=handler.session_id, error=str(exc))
+            return {"status": "error", "error": str(exc)}
+
+    def _save_draft_screenshot(self, session_id: str) -> str:
+        session_dir = SESSIONS_DIR / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        screenshot_path = str(session_dir / "draft_screenshot.png")
+        try:
+            self.browser.page.screenshot(path=screenshot_path, full_page=True)
+        except Exception as e:
+            logging.warning(f"[Draft] Screenshot failed: {e}")
+        return screenshot_path
+
+    def _save_draft_session(self, session_id: str, field_mappings: list, fill_result: dict) -> str:
+        session_dir = SESSIONS_DIR / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        draft_path = str(session_dir / "draft_session.json")
+        draft_data = {
+            "session_id": session_id,
+            "saved_at": datetime.utcnow().isoformat(),
+            "url": self.browser.page.url if self.browser and self.browser.page else "",
+            "field_mappings": field_mappings,
+            "fill_result": fill_result,
+            "job_meta": getattr(self, "job_meta", {}),
+            "status": "draft"
+        }
+        with open(draft_path, "w", encoding="utf-8") as f:
+            json.dump(draft_data, f, indent=2)
+        return draft_path
+
+    def submit_draft(self, session_id: str) -> Dict[str, Any]:
+        draft_path = SESSIONS_DIR / session_id / "draft_session.json"
+        if not draft_path.exists():
+            return {"status": "error", "error": f"Draft session {session_id} not found"}
+        try:
+            with open(draft_path, "r", encoding="utf-8") as f:
+                draft_data = json.load(f)
+
+            url = draft_data.get("url", "")
+            if url:
+                self.browser.launch(headless=False)
+                self.browser.navigate(url)
+
+            platform_name = self._detect_platform(url) if url else "generic"
+            handler = self._get_or_create_handler(platform_name)
+            handler.session_id = session_id
+            handler.logger = self.logger
+
+            handler.submit_application(self.browser)
+
+            draft_data["status"] = "submitted"
+            draft_data["submitted_at"] = datetime.utcnow().isoformat()
+            with open(draft_path, "w", encoding="utf-8") as f:
+                json.dump(draft_data, f, indent=2)
+
+            return {"status": "submitted", "session_id": session_id}
+        except Exception as exc:
+            logging.exception(f"[Submit Draft] Error: {exc}")
             return {"status": "error", "error": str(exc)}
 
     def _get_evaluation_summary(self) -> Optional[Dict[str, Any]]:
@@ -591,14 +679,9 @@ class ApplicationOrchestrator:
     # 3e️⃣ Form filling (auto + HITL)
     # --------------------------------------------------------------------------- #
     def _fill_form(self, handler: BasePlatformHandler,
-                   field_mappings: list):
-        """
-        Iterates over each field mapping:
-        - High confidence (>0.85) → auto‑fill via Playwright.
-        - Low confidence or flagged → pause for human input (HITL gate).
-        - Sensitive fields (salary, SSN, payment) always trigger HITL.
-        """
-        browser = self.browser.page
+                   field_mappings: list, mode: str = APPLICATION_MODE_DRAFT) -> Dict[str, Any]:
+        filled = 0
+        skipped = 0
         for mapping in field_mappings:
             fid = mapping["field_id"]
             value = mapping["candidate_value"]
@@ -606,28 +689,55 @@ class ApplicationOrchestrator:
             reason = mapping.get("hitl_reason", "")
 
             if needs_hitl:
-                logging.info(f"[Session] HITL field detected: {fid} (reason={reason})")
-                self._emit_hitl_event(
-                    gate_id=f"GATE_{fid.upper().replace('-', '_')}",
-                    message=f"Field '{fid}' needs human input (reason: {reason})"
-                )
-                self._wait_for_gate_response()
-                # After the human resolves the gate, they will have edited the
-                # value via the UI; we read it back here:
-                value = handler.get_human_filled_value(fid)
-            else:
-                # Auto‑fill
-                try:
-                    self._fill_single_field(fid, value)
-                    logging.debug(f"[Session] Auto‑filled {fid} with {value}")
-                except Exception as e:
-                    logging.warning(f"[Session] Auto‑fill failed for {fid}: {e}")
+                if mode == APPLICATION_MODE_AUTO:
+                    resolved = self._resolve_sensitive_value(fid, value)
+                    if resolved is None:
+                        skipped += 1
+                        logging.debug(f"[Fill] Skipping unresolvable sensitive field {fid}")
+                        continue
+                    value = resolved
+                else:
+                    logging.info(f"[Session] HITL field detected: {fid} (reason={reason})")
+                    self._emit_hitl_event(
+                        gate_id=f"GATE_{fid.upper().replace('-', '_')}",
+                        message=f"Field '{fid}' needs human input (reason: {reason})"
+                    )
+                    self._wait_for_gate_response()
+                    value = handler.get_human_filled_value(fid)
 
-        # After all fields are filled, click the final “Continue/Save” button
-        # (handler‑specific helper)
+            try:
+                self._fill_single_field(fid, value)
+                filled += 1
+                logging.debug(f"[Fill] Filled {fid}")
+            except Exception as e:
+                skipped += 1
+                logging.warning(f"[Fill] Failed to fill {fid}: {e}")
+
         if hasattr(handler, "click_continue"):
             handler.click_continue(self.browser.page)
-            logging.debug("[Session] Clicked 'Continue' after field fill")
+            logging.debug("[Fill] Clicked 'Continue' after field fill")
+
+        return {"filled": filled, "skipped": skipped}
+
+    def _resolve_sensitive_value(self, field_id: str, default_value: str) -> Optional[str]:
+        fid_lower = field_id.lower()
+        profile = self.candidate_profile
+
+        if any(k in fid_lower for k in ("salary", "compensation", "pay", "rate", "wage")):
+            target = profile.get("compensation_targets", {}).get("target_base", "")
+            if target:
+                return target
+
+        if any(k in fid_lower for k in ("ssn", "social_security", "national_id", "tax_id", "ein")):
+            return None
+
+        if any(k in fid_lower for k in ("reference", "referee")):
+            return None
+
+        if default_value and not str(default_value).startswith("__HITL"):
+            return default_value
+
+        return None
 
     # --------------------------------------------------------------------------- #
     # 3f️⃣ Final gate (final submit)
