@@ -19,6 +19,18 @@ from pathlib import Path
 from ..browser.playwright_wrapper import BrowserWrapper
 from ..tracker.logger import Logger
 
+try:
+    from agent.ranking.quality_gate import QualityGate
+    from agent.ranking.feedback_ranker import FeedbackRanker
+    _RANKING_AVAILABLE = True
+except ImportError:
+    try:
+        from ..ranking.quality_gate import QualityGate
+        from ..ranking.feedback_ranker import FeedbackRanker
+        _RANKING_AVAILABLE = True
+    except ImportError:
+        _RANKING_AVAILABLE = False
+
 
 class ScanLevel(Enum):
     """Scan strategy levels."""
@@ -114,6 +126,9 @@ class PortalScanner:
         self.companies: List[CompanyConfig] = []
         self.title_filter: TitleFilter = TitleFilter()
         self.search_queries: List[Dict[str, Any]] = []
+
+        self._quality_gate = QualityGate() if _RANKING_AVAILABLE else None
+        self._feedback_ranker = FeedbackRanker() if _RANKING_AVAILABLE else None
 
         self._load_config()
         self._scan_history: List[str] = self._load_history()
@@ -725,16 +740,25 @@ class PortalScanner:
             )
 
             if has_positive and not has_negative:
-                # Calculate relevance score
                 score = sum(
                     1 for kw in self.title_filter.positive
                     if kw.lower() in title_lower
                 )
-                # Seniority boost
                 if any(sb.lower() in title_lower for sb in self.title_filter.seniority_boost):
                     score += 0.5
 
-                listing.score = min(score, 5.0)
+                if self._feedback_ranker is not None:
+                    fb_delta = self._feedback_ranker.score_listing({
+                        "title":       listing.title,
+                        "company":     listing.company,
+                        "location":    listing.location,
+                        "description": listing.description,
+                        "url":         listing.url,
+                        "source":      listing.detected_via.value,
+                    })
+                    score += fb_delta * 0.1
+
+                listing.score = min(max(score, 0.0), 5.0)
                 filtered.append(listing)
             else:
                 rejected += 1
@@ -837,10 +861,14 @@ class PortalScanner:
                 "url": listing.url
             })
 
-        # Merge and deduplicate
         all_urls = {j.get("url", j.get("applyUrl", "")) for j in existing_jobs}
         for job in new_jobs:
             if job.get("url") not in all_urls:
+                if self._quality_gate is not None:
+                    gate_result = self._quality_gate.evaluate(job)
+                    job["quality_score"]   = gate_result["final_score"]
+                    job["quality_passes"]  = gate_result["passes"]
+                    job["quality_penalty"] = gate_result["total_penalty"]
                 existing_jobs.append(job)
 
         # Save
