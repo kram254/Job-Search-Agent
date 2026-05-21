@@ -10,6 +10,7 @@ class LLMClient:
 
     ANTHROPIC_MODEL = "claude-opus-4-5"
     GEMINI_MODEL = "gemini-1.5-flash"
+    GEMINI_VISION_MODEL = "gemini-1.5-flash"
 
     STEP_PROVIDERS: Dict[str, str] = {
         "evaluator":  "anthropic",
@@ -107,6 +108,60 @@ class LLMClient:
             return json.loads(raw)
         except json.JSONDecodeError:
             return {"raw": raw}
+
+    def complete_vision(self, img_b64: str, prompt: str, system: str = "",
+                        max_tokens: int = 512) -> str:
+        if self._gemini_available:
+            try:
+                return self._gemini_vision_complete(img_b64, prompt, system, max_tokens)
+            except Exception as e:
+                logger.warning(f"Gemini vision failed, falling back to Anthropic: {e}")
+        return self._anthropic_vision_complete(img_b64, prompt, system, max_tokens)
+
+    def _gemini_vision_complete(self, img_b64: str, prompt: str,
+                                 system: str, max_tokens: int) -> str:
+        import requests
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{self.GEMINI_VISION_MODEL}:generateContent?key={self.gemini_api_key}"
+        )
+        full_prompt = f"{system}\n\n{prompt}" if system else prompt
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"inline_data": {"mime_type": "image/png", "data": img_b64}},
+                    {"text": full_prompt}
+                ]
+            }],
+            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.0}
+        }
+        resp = requests.post(url, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise RuntimeError("Gemini vision returned no candidates")
+        return candidates[0]["content"]["parts"][0]["text"]
+
+    def _anthropic_vision_complete(self, img_b64: str, prompt: str,
+                                    system: str, max_tokens: int) -> str:
+        client = self._get_anthropic_client()
+        content: List[Any] = [
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": img_b64}
+            },
+            {"type": "text", "text": prompt}
+        ]
+        kwargs: Dict[str, Any] = {
+            "model": self.ANTHROPIC_MODEL,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": content}]
+        }
+        if system:
+            kwargs["system"] = system
+        response = client.messages.create(**kwargs)
+        return response.content[0].text
 
     def provider(self) -> str:
         return self._provider

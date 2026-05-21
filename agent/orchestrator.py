@@ -18,8 +18,10 @@ Key responsibilities:
 """
 
 import os
+import re
 import json
 import uuid
+import base64
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +32,7 @@ from agent.platforms.greenhouse import GreenhouseHandler
 from agent.platforms.linkedin import LinkedInHandler
 from agent.platforms.indeed import IndeedHandler
 from agent.llm.field_mapper import FieldMapper, JobEvaluation, Archetype
+from agent.llm.llm_client import LLMClient
 from agent.browser.playwright_wrapper import BrowserWrapper
 from agent.browser.form_inventory import FormInventory
 from agent.tracker.logger import Logger
@@ -79,17 +82,15 @@ class ApplicationOrchestrator:
         with open(hitl_config_path, "r", encoding="utf-8") as f:
             self.hitl_config = json.load(f)
 
-        # Logger for audit trail
         self.logger = Logger(logs_dir=LOGS_DIR)
 
-        # Browser wrapper (single persistent context per session)
-        self.browser = BrowserWrapper(headless=False)  # headed for HITL visibility
+        self.browser = BrowserWrapper(headless=False)
 
-        # Mapping of platform name → handler instance (lazy‑loaded)
         self.platform_handlers: Dict[str, BasePlatformHandler] = {}
         self.current_evaluation: Optional[JobEvaluation] = None
         self.pdf_generator = PDFGenerator(output_dir="output/cvs")
         self.tailored_cv_path: Optional[str] = None
+        self.llm_client = LLMClient()
 
     # --------------------------------------------------------------------------- #
     # 1️⃣ Public entry point
@@ -287,6 +288,40 @@ class ApplicationOrchestrator:
                     el.fill(str(value))
         except Exception as e:
             logging.warning(f"[Orchestrator] _fill_single_field({field_id}): {e}")
+
+    def _ask_vision_for_coords(self, img_b64: str, label: str) -> Optional[tuple]:
+        prompt = (
+            f'In this screenshot of a web form, locate the input field labeled "{label}". '
+            'Return ONLY a JSON object with integer pixel coordinates: {"x": <int>, "y": <int>}. '
+            'If the field cannot be found, return {"x": null, "y": null}.'
+        )
+        try:
+            raw = self.llm_client.complete_vision(img_b64, prompt, max_tokens=128)
+            match = re.search(r'"x"\s*:\s*(\d+)[^}]*"y"\s*:\s*(\d+)', raw)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+        except Exception as e:
+            logging.warning(f"[Vision] coord extraction failed: {e}")
+        return None
+
+    def _vision_fill_field(self, field_id: str, value: str, label: str = "") -> bool:
+        try:
+            page = self.browser.page
+            screenshot_bytes = page.screenshot(type="png")
+            img_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+            field_label = label or field_id
+            coords = self._ask_vision_for_coords(img_b64, field_label)
+            if coords is None:
+                logging.warning(f"[Vision] No coords found for field '{field_label}'")
+                return False
+            x, y = coords
+            page.mouse.click(x, y)
+            page.keyboard.type(str(value))
+            logging.debug(f"[Vision] Filled '{field_id}' via pixel click at ({x},{y})")
+            return True
+        except Exception as e:
+            logging.warning(f"[Vision] _vision_fill_field({field_id}): {e}")
+            return False
 
     # --------------------------------------------------------------------------- #
     # 3c️⃣ Form discovery & inventory
@@ -710,8 +745,14 @@ class ApplicationOrchestrator:
                 filled += 1
                 logging.debug(f"[Fill] Filled {fid}")
             except Exception as e:
-                skipped += 1
-                logging.warning(f"[Fill] Failed to fill {fid}: {e}")
+                label = mapping.get("label", fid)
+                vision_ok = self._vision_fill_field(fid, value, label)
+                if vision_ok:
+                    filled += 1
+                    logging.debug(f"[Fill] Vision-filled {fid}")
+                else:
+                    skipped += 1
+                    logging.warning(f"[Fill] Failed to fill {fid}: {e}")
 
         if hasattr(handler, "click_continue"):
             handler.click_continue(self.browser.page)
