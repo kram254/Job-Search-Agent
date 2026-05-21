@@ -7,13 +7,18 @@ logger = logging.getLogger("llm_client")
 
 
 class LLMClient:
-    """
-    Unified LLM client with Anthropic primary and Gemini free-tier fallback.
-    Routes to Gemini automatically when Anthropic quota is exhausted.
-    """
 
     ANTHROPIC_MODEL = "claude-opus-4-5"
     GEMINI_MODEL = "gemini-1.5-flash"
+
+    STEP_PROVIDERS: Dict[str, str] = {
+        "evaluator":  "anthropic",
+        "ingestor":   "anthropic",
+        "actuator":   "anthropic",
+        "generator":  "anthropic",
+        "scout":      "gemini",
+        "query_gen":  "gemini",
+    }
 
     def __init__(self, anthropic_api_key: Optional[str] = None,
                  gemini_api_key: Optional[str] = None):
@@ -78,6 +83,17 @@ class LLMClient:
         if not candidates:
             raise RuntimeError("Gemini returned no candidates")
         return candidates[0]["content"]["parts"][0]["text"]
+
+    def complete_for_step(self, step: str, prompt: str, system: str = "",
+                          max_tokens: int = 1024, temperature: float = 0.3) -> str:
+        preferred = self.STEP_PROVIDERS.get(step, "anthropic")
+        if preferred == "gemini" and self._gemini_available:
+            try:
+                return self._gemini_complete(prompt, system, max_tokens, temperature)
+            except Exception as e:
+                logger.warning(f"Gemini failed for step '{step}', falling back to Anthropic: {e}")
+                return self._anthropic_complete(prompt, system, max_tokens, temperature)
+        return self.complete(prompt, system=system, max_tokens=max_tokens, temperature=temperature)
 
     def complete_json(self, prompt: str, system: str = "",
                       max_tokens: int = 1024) -> Any:
