@@ -6,3 +6,4 @@ pathlib
 pydantic
 gunicorn
 python-dotenv
+requests
