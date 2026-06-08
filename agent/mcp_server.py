@@ -92,17 +92,28 @@ TOOLS = [
 ]
 
 
+_SHORT_TERM_MIN_LEN = 8
+
+
+def _word_boundary_match(term: str, text: str) -> bool:
+    import re as _re
+    if len(term) >= _SHORT_TERM_MIN_LEN:
+        return term in text
+    pattern = r'(?<![a-z0-9])' + _re.escape(term) + r'(?![a-z0-9])'
+    return bool(_re.search(pattern, text, _re.IGNORECASE))
+
+
 def _extract_stack(text: str) -> List[str]:
     if not _ranking_available:
         return []
     text_lower = text.lower()
     found = []
     for canonical, (aliases, _cat) in TECH_TAXONOMY.items():
-        if canonical in text_lower:
+        if _word_boundary_match(canonical, text_lower):
             found.append(canonical)
             continue
         for alias in aliases:
-            if alias in text_lower:
+            if _word_boundary_match(alias, text_lower):
                 found.append(canonical)
                 break
     return sorted(set(found))
@@ -170,8 +181,9 @@ def _handle_score_job_fit(params: Dict[str, Any]) -> Dict[str, Any]:
             if canonical:
                 resolved_candidate.append(canonical)
 
-    matched = [s for s in resolved_candidate if s in stack]
-    missing = [s for s in stack if s not in resolved_candidate]
+    resolved_candidate_set = list(dict.fromkeys(resolved_candidate))
+    matched = [s for s in resolved_candidate_set if s in stack]
+    missing = [s for s in stack if s not in resolved_candidate_set]
 
     quality: Dict[str, Any] = {}
     if _quality_gate:
@@ -180,7 +192,7 @@ def _handle_score_job_fit(params: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "jd_stack":          stack,
-        "candidate_skills":  resolved_candidate,
+        "candidate_skills":  resolved_candidate_set,
         "matched_skills":    matched,
         "missing_skills":    missing,
         "match_ratio":       round(len(matched) / max(len(stack), 1), 3),
