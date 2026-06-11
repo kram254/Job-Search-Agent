@@ -24,7 +24,37 @@
       "CVs/Soft Dev CV.md",
       "CVs/SoftwareDevCV.md"
     ],
-    "pdf_paths": []
+    "pdf_paths": [
+      "CVs/My CVc.pdf",
+      "CVs/Soft Dev CV.pdf",
+      "CVs/SoftwareDevCV.pdf"
+    ],
+    "variants": [
+      {
+        "id": "ai_engineer",
+        "md_path": "CVs/My CVc.md",
+        "pdf_path": "CVs/My CVc.pdf",
+        "archetypes": ["agentic_automation", "ai_platform_llmops", "ai_solutions_architect"],
+        "focus_tags": ["llm", "rag", "ai_agents", "mlops", "python", "langchain"],
+        "label": "AI Engineer"
+      },
+      {
+        "id": "software_dev",
+        "md_path": "CVs/Soft Dev CV.md",
+        "pdf_path": "CVs/Soft Dev CV.pdf",
+        "archetypes": ["ai_forward_deployed", "technical_ai_pm"],
+        "focus_tags": ["python", "flask", "django", "docker", "aws", "fastapi"],
+        "label": "Software Developer"
+      },
+      {
+        "id": "fullstack",
+        "md_path": "CVs/SoftwareDevCV.md",
+        "pdf_path": "CVs/SoftwareDevCV.pdf",
+        "archetypes": ["ai_transformation", "unknown"],
+        "focus_tags": ["python", "flutter", "firebase", "aws", "azure", "gcp"],
+        "label": "Full-Stack Engineer"
+      }
+    ]
   },
   "education": [
     {
