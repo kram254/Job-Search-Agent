@@ -116,5 +116,38 @@ class AshbyHandler(BasePlatformHandler):
             self.logger.error(f"click_continue error: {e}")
             return False
 
+    def upload_resume(self, page, cv_path: str) -> bool:
+        try:
+            upload_selectors = [
+                "input[type='file'][accept*='pdf']",
+                "input[type='file'][name*='resume']",
+                "input[type='file'][name*='cv']",
+                "input[type='file']",
+            ]
+            for selector in upload_selectors:
+                el = page.query_selector(selector)
+                if el:
+                    el.set_input_files(cv_path)
+                    logging.info(f"[Ashby] Resume uploaded: {cv_path}")
+                    return True
+        except Exception as e:
+            self.logger.error(f"upload_resume error: {e}")
+        return False
+
     def submit_application(self, page) -> bool:
+        submit_selectors = [
+            "button:has-text('Submit application')",
+            "button:has-text('Submit Application')",
+            "button:has-text('Submit')",
+            "button[type='submit']",
+        ]
+        for sel in submit_selectors:
+            try:
+                btn = page.query_selector(sel)
+                if btn:
+                    btn.click()
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                    return True
+            except Exception:
+                continue
         return self.click_continue(page)
