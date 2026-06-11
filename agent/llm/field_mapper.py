@@ -248,17 +248,25 @@ class FieldMapper:
 
         return self.evaluation
 
+    @staticmethod
+    def _word_boundary_match(term: str, text: str) -> bool:
+        import re as _re
+        if len(term) >= 8:
+            return term in text
+        pattern = r'(?<![a-z0-9])' + _re.escape(term) + r'(?![a-z0-9])'
+        return bool(_re.search(pattern, text, _re.IGNORECASE))
+
     def _extract_skills_with_taxonomy(self, text: str) -> Set[str]:
         if not _TAXONOMY_AVAILABLE:
             return set()
         text_lower = text.lower()
         found: Set[str] = set()
         for canonical, (aliases, _cat) in TECH_TAXONOMY.items():
-            if canonical in text_lower:
+            if self._word_boundary_match(canonical, text_lower):
                 found.add(canonical)
                 continue
             for alias in aliases:
-                if alias in text_lower:
+                if self._word_boundary_match(alias, text_lower):
                     found.add(canonical)
                     break
         return found
@@ -672,16 +680,26 @@ class FieldMapper:
         return found_skills
 
     def _estimate_years_experience(self) -> int:
-        """Estimate candidate years from CV text."""
-        # Look for year ranges in CV
-        year_patterns = re.findall(r"(20\d{2})\s*-\s*(20\d{2}|present)", self.cv_text, re.IGNORECASE)
+        from datetime import datetime as _dt
+        current_year = _dt.now().year
+        year_patterns = re.findall(r"(20\d{2})\s*[-–]\s*(20\d{2}|present)", self.cv_text, re.IGNORECASE)
         if year_patterns:
             total_years = 0
             for start, end in year_patterns:
-                end_year = 2024 if end.lower() == "present" else int(end)
+                end_year = current_year if end.lower() == "present" else int(end)
                 total_years += end_year - int(start)
-            return min(total_years, 15)  # Cap at 15
-        return 5  # Default assumption
+            return min(total_years, 15)
+        education = self.candidate_profile.get("education", [])
+        if education:
+            grad_years = []
+            for edu in education:
+                yrs = str(edu.get("years", ""))
+                m = re.search(r"(20\d{2})", yrs.split("-")[-1])
+                if m:
+                    grad_years.append(int(m.group(1)))
+            if grad_years:
+                return min(current_year - max(grad_years), 15)
+        return 5
 
     def _generate_recommendation(self, score: float) -> str:
         """Generate application recommendation based on score."""
@@ -815,7 +833,7 @@ class FieldMapper:
 
             # Generate value based on field type and archetype
             candidate_value = self._generate_field_value(
-                field_id, field_type, item.get("label", "")
+                field_id, field_type, item.get("label", ""), options=item.get("options", [])
             )
 
             # Calculate confidence based on field type and match quality
@@ -825,6 +843,9 @@ class FieldMapper:
 
             mappings.append({
                 "field_id": field_id,
+                "type": field_type,
+                "label": item.get("label", ""),
+                "options": item.get("options", []),
                 "candidate_value": candidate_value,
                 "requires_hitl": requires_hitl,
                 "confidence": confidence,
@@ -851,52 +872,77 @@ class FieldMapper:
 
         return False
 
-    def _generate_field_value(self, field_id: str, field_type: str, label: str) -> str:
-        """Generate appropriate value for form field."""
-        # Map common fields to candidate profile data
+    def _generate_field_value(self, field_id: str, field_type: str, label: str,
+                               options: Optional[List[Dict]] = None) -> str:
+        pd = self.candidate_profile.get("personal_details", {})
+        pp = self.candidate_profile.get("professional_profiles", {})
+        wa = self.candidate_profile.get("work_authorization", {})
+        edu = self.candidate_profile.get("education", [{}])
         field_mappings = {
-            "name": self.candidate_profile.get("personal_details", {}).get("name", ""),
-            "email": self.candidate_profile.get("personal_details", {}).get("email", ""),
-            "phone": self.candidate_profile.get("personal_details", {}).get("phone", {}).get("primary", ""),
-            "linkedin": self.candidate_profile.get("professional_profiles", {}).get("linkedin", ""),
-            "github": self.candidate_profile.get("professional_profiles", {}).get("github", ""),
-            "website": self.candidate_profile.get("professional_profiles", {}).get("medium", ""),
-            "location": "Kenya" if self.candidate_profile.get("work_authorization", {}).get("kenya") == "citizen" else ""
+            "name": pd.get("name", ""),
+            "first_name": pd.get("name", "").split()[0] if pd.get("name") else "",
+            "last_name": " ".join(pd.get("name", "").split()[1:]) if pd.get("name") else "",
+            "email": pd.get("email", ""),
+            "phone": pd.get("phone", {}).get("primary", ""),
+            "linkedin": pp.get("linkedin", ""),
+            "github": pp.get("github", ""),
+            "website": pp.get("medium", ""),
+            "location": "Nairobi, Kenya" if wa.get("kenya") == "citizen" else "",
+            "country": "Kenya" if wa.get("kenya") == "citizen" else "",
         }
 
-        # Check direct mappings
         for key, value in field_mappings.items():
             if key in field_id.lower() or key in label.lower():
                 return value
 
-        # Handle specific field types
         if field_type == "select" or "dropdown" in field_id.lower():
-            return self._handle_select_field(field_id, label)
+            return self._handle_select_field(field_id, label, options=options)
 
         if "experience" in field_id.lower() or "years" in field_id.lower():
-            return "6+"
+            yrs = self._estimate_years_experience()
+            return f"{yrs}+"
 
         if "salary" in field_id.lower() or "compensation" in field_id.lower():
             return "__HITL_REQUIRED__"
 
-        # Default for unknown fields
-        return ""
+        if "education" in field_id.lower() or "degree" in field_id.lower():
+            return edu[0].get("degree", "Bachelor's") if edu else "Bachelor's"
 
-    def _handle_select_field(self, field_id: str, label: str) -> str:
-        """Handle dropdown/select fields with smart defaults."""
-        label_lower = label.lower()
-
-        if "authorization" in label_lower or "visa" in label_lower:
-            return "No sponsorship needed"
-
-        if "remote" in label_lower or "work" in label_lower:
-            return "Remote"
-
-        if "notice" in label_lower or "start" in label_lower:
+        if "notice" in field_id.lower() or "start" in label.lower():
             return "2 weeks"
 
-        if "education" in label_lower or "degree" in label_lower:
-            return "Bachelor's"
+        return ""
+
+    def _handle_select_field(self, field_id: str, label: str,
+                              options: Optional[List[Dict]] = None) -> str:
+        label_lower = label.lower()
+        field_lower = field_id.lower()
+
+        preferred_map = {
+            ("authorization", "visa", "sponsor"): "No sponsorship needed",
+            ("remote", "work type", "work_type"): "Remote",
+            ("notice", "start date", "availability"): "2 weeks",
+            ("education", "degree", "qualification"): "Bachelor's",
+            ("gender",): "__HITL_REQUIRED__",
+            ("race", "ethnicity", "diversity"): "__HITL_REQUIRED__",
+            ("veteran",): "__HITL_REQUIRED__",
+            ("disability",): "__HITL_REQUIRED__",
+        }
+
+        for keywords, value in preferred_map.items():
+            if any(k in label_lower or k in field_lower for k in keywords):
+                if options and value not in ("__HITL_REQUIRED__",):
+                    option_texts = [o.get("text", "").lower() for o in options]
+                    for opt in options:
+                        opt_text = opt.get("text", "").lower()
+                        if any(k in opt_text for k in keywords):
+                            return opt.get("text", value)
+                return value
+
+        if options:
+            non_empty = [o for o in options if o.get("text", "").strip() and o.get("value", "")]
+            if non_empty:
+                return non_empty[0].get("text", "")
 
         return ""
 
