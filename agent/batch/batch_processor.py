@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -37,8 +38,10 @@ class BatchProcessor:
     def _save_state(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
-            with open(self.state_path, "w") as f:
+            tmp = str(self.state_path) + ".tmp"
+            with open(tmp, "w") as f:
                 json.dump(self.state, f, indent=2)
+            os.replace(tmp, str(self.state_path))
 
     def start_batch(self, items: List[Dict[str, Any]], batch_id: Optional[str] = None) -> str:
         bid = batch_id or f"batch_{abs(hash(str(items[:1]))) % 10000000}_{int(datetime.utcnow().timestamp())}"
@@ -59,8 +62,10 @@ class BatchProcessor:
                 processor_fn: Callable[[Dict[str, Any]], Dict[str, Any]],
                 batch_id: Optional[str] = None,
                 resume: bool = True) -> Dict[str, Any]:
+        prior_results = dict(self.state.get("results", {})) if resume else {}
         bid = self.start_batch(items, batch_id)
-
+        if resume and prior_results:
+            self.state["results"] = prior_results
         already_done = set(self.state.get("results", {}).keys()) if resume else set()
 
         pending = [item for item in items if str(item.get("id", "")) not in already_done]
@@ -79,11 +84,18 @@ class BatchProcessor:
                     with self._lock:
                         self.state["results"][item_id] = result
                         self.state["processed"] += 1
+                        tmp = str(self.state_path) + ".tmp"
+                        with open(tmp, "w") as _f:
+                            json.dump(self.state, _f, indent=2)
+                        os.replace(tmp, str(self.state_path))
                 except Exception as e:
                     with self._lock:
                         self.state["results"][item_id] = {"error": str(e), "status": "failed"}
                         self.state["failed"] += 1
-                self._save_state()
+                        tmp = str(self.state_path) + ".tmp"
+                        with open(tmp, "w") as _f:
+                            json.dump(self.state, _f, indent=2)
+                        os.replace(tmp, str(self.state_path))
 
         self.state["status"] = "completed"
         self.state["completed_at"] = datetime.utcnow().isoformat()
