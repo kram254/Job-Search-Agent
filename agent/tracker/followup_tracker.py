@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -61,11 +62,13 @@ class FollowUpTracker:
 
     def _save(self) -> None:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.storage_path, "w") as f:
+        tmp = str(self.storage_path) + ".tmp"
+        with open(tmp, "w") as f:
             json.dump(self.records, f, indent=2)
+        os.replace(tmp, str(self.storage_path))
 
     def track(self, job_id: str, company: str, title: str, applied_at: Optional[str] = None,
-              contact_name: str = "", archetype: str = "") -> str:
+              contact_name: str = "", archetype: str = "", candidate_name: str = "") -> str:
         record_id = f"fu_{job_id}"
 
         for record in self.records:
@@ -89,6 +92,7 @@ class FollowUpTracker:
             "company": company,
             "title": title,
             "contact_name": contact_name,
+            "candidate_name": candidate_name,
             "archetype": archetype,
             "applied_at": applied_dt.isoformat(),
             "followups": followups,
@@ -125,6 +129,7 @@ class FollowUpTracker:
                             company=record["company"],
                             title=record["title"],
                             contact_name=record.get("contact_name", "Hiring Manager"),
+                            candidate_name=record.get("candidate_name", ""),
                             archetype=record.get("archetype", "AI Engineering")
                         )
                     })
