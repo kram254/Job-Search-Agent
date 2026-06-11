@@ -41,7 +41,6 @@ class ScanLevel(Enum):
 
 @dataclass
 class JobListing:
-    """Discovered job listing."""
     title: str
     company: str
     url: str
@@ -51,6 +50,8 @@ class JobListing:
     scan_timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     is_active: bool = True
     score: float = 0.0
+    quality_score: float = 100.0
+    quality_passes: bool = True
 
 
 @dataclass
@@ -131,7 +132,8 @@ class PortalScanner:
         self._feedback_ranker = FeedbackRanker() if _RANKING_AVAILABLE else None
 
         self._load_config()
-        self._scan_history: List[str] = self._load_history()
+        self._scan_history: set = self._load_history()
+        self._submitted_urls: set = self._load_submitted()
 
     def _load_config(self) -> None:
         """Load portal configuration from YAML."""
@@ -328,26 +330,55 @@ class PortalScanner:
         except Exception as e:
             self.logger.error(f"Failed to save default config: {e}")
 
-    def _load_history(self) -> List[str]:
-        """Load scan history (URLs already seen)."""
+    def _load_history(self) -> set:
         if not self.history_path.exists():
-            return []
-
+            return set()
         try:
             with open(self.history_path, "r") as f:
-                return json.load(f)
+                return set(json.load(f))
         except Exception as e:
             self.logger.error(f"Failed to load scan history: {e}")
-            return []
+            return set()
+
+    def _load_submitted(self) -> set:
+        submitted_path = self.history_path.parent / "submitted_urls.json"
+        if not submitted_path.exists():
+            return set()
+        try:
+            with open(submitted_path, "r") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+
+    def record_submitted(self, url: str) -> None:
+        self._submitted_urls.add(url.split("?")[0].rstrip("/"))
+        submitted_path = self.history_path.parent / "submitted_urls.json"
+        try:
+            submitted_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = str(submitted_path) + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(list(self._submitted_urls), f)
+            import os
+            os.replace(tmp, str(submitted_path))
+        except Exception as e:
+            self.logger.error(f"Failed to save submitted urls: {e}")
+
+    def is_already_applied(self, url: str) -> bool:
+        return url.split("?")[0].rstrip("/") in self._submitted_urls
 
     def _save_history(self) -> None:
-        """Save scan history."""
         try:
             self.history_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.history_path, "w") as f:
-                json.dump(self._scan_history, f)
+            import os
+            tmp = str(self.history_path) + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(list(self._scan_history), f)
+            os.replace(tmp, str(self.history_path))
         except Exception as e:
             self.logger.error(f"Failed to save scan history: {e}")
+
+    async def run_full_scan(self) -> ScanResult:
+        return await self.scan()
 
     def _detect_platform(self, url: str) -> str:
         """Detect ATS platform from URL."""
@@ -405,7 +436,7 @@ class PortalScanner:
 
         # Update history
         for listing in verified_listings:
-            self._scan_history.append(listing.url)
+            self._scan_history.add(listing.url)
         self._save_history()
 
         duration = (datetime.now() - start_time).total_seconds()
@@ -448,15 +479,19 @@ class PortalScanner:
         listings = []
 
         try:
-            # Navigate to careers page
-            await self.browser.navigate(company.careers_url)
+            self.browser.navigate(company.careers_url)
 
-            # Platform-specific scraping logic
-            if company.platform == "greenhouse":
+            scan_method = company.scan_method.replace("_api", "")
+            if company.platform in ("greenhouse", "ashby", "lever") or scan_method in ("greenhouse", "ashby", "lever"):
+                effective_platform = company.platform if company.platform in ("greenhouse", "ashby", "lever") else scan_method
+            else:
+                effective_platform = company.platform
+
+            if effective_platform == "greenhouse":
                 listings = await self._scrape_greenhouse(company)
-            elif company.platform == "ashby":
+            elif effective_platform == "ashby":
                 listings = await self._scrape_ashby(company)
-            elif company.platform == "lever":
+            elif effective_platform == "lever":
                 listings = await self._scrape_lever(company)
             else:
                 listings = await self._scrape_generic(company)
@@ -747,15 +782,25 @@ class PortalScanner:
                 if any(sb.lower() in title_lower for sb in self.title_filter.seniority_boost):
                     score += 0.5
 
+                listing_dict = {
+                    "title":       listing.title,
+                    "company":     listing.company,
+                    "location":    listing.location,
+                    "description": listing.description,
+                    "url":         listing.url,
+                    "source":      listing.detected_via.value,
+                }
+                if self._quality_gate is not None:
+                    gate = self._quality_gate.evaluate(listing_dict)
+                    listing.quality_score  = gate["final_score"]
+                    listing.quality_passes = gate["passes"]
+                    if not gate["passes"]:
+                        rejected += 1
+                        continue
+                    score += gate["final_score"] * 0.05
+
                 if self._feedback_ranker is not None:
-                    fb_delta = self._feedback_ranker.score_listing({
-                        "title":       listing.title,
-                        "company":     listing.company,
-                        "location":    listing.location,
-                        "description": listing.description,
-                        "url":         listing.url,
-                        "source":      listing.detected_via.value,
-                    })
+                    fb_delta = self._feedback_ranker.score_listing(listing_dict)
                     score += fb_delta * 0.1
 
                 listing.score = min(max(score, 0.0), 5.0)
@@ -791,7 +836,7 @@ class PortalScanner:
         expired = 0
 
         for listing in listings:
-            if listing.detected_via != ScanLevel.WEBSEARCH:
+            if listing.detected_via in (ScanLevel.PLAYWRIGHT_DIRECT, ScanLevel.GREENHOUSE_API):
                 listing.is_active = True
                 verified.append(listing)
                 continue
