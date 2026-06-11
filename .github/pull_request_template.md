@@ -1,28 +1,21 @@
 ## Summary
 
-<!-- Brief description of what this PR does and why -->
+<!-- What does this PR do? Keep it to 1-3 sentences. -->
 
 ## Changes
 
-- 
+<!-- Bullet the concrete changes -->
+-
+-
 
-## Type of Change
+## Test plan
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Refactor
-- [ ] CI/CD / infra
-- [ ] Documentation
+<!-- How did you verify this works? -->
+- [ ] `pytest tests/` passes locally
+- [ ] `ruff check .` is clean (or no new violations)
+- [ ] Manually exercised the affected route(s) / agent flow
+- [ ] Screenshots / logs attached if relevant
 
-## Testing
+## Notes for reviewers
 
-- [ ] `pytest tests/ -v` passes locally
-- [ ] `ruff check .` passes (or failures are advisory and noted above)
-- [ ] `python3 -c "import agent.app"` imports cleanly
-- [ ] Tested manually against a live job board (if applicable)
-
-## Checklist
-
-- [ ] No secrets or credentials committed
-- [ ] `render.yaml` updated if deployment config changed
-- [ ] PR description explains *why*, not just *what*
+<!-- Anything reviewers should know: gotchas, follow-ups, etc. -->
