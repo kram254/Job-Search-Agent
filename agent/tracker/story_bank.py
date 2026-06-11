@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -24,8 +25,10 @@ class StoryBank:
 
     def _save(self) -> None:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.storage_path, "w") as f:
+        tmp = str(self.storage_path) + ".tmp"
+        with open(tmp, "w") as f:
             json.dump(self.stories, f, indent=2)
+        os.replace(tmp, str(self.storage_path))
 
     def append(self, story: Dict[str, Any]) -> str:
         for required in ["situation", "task", "action", "result"]:
