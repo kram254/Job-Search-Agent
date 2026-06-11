@@ -654,6 +654,25 @@ def track_followup():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/feedback', methods=['POST'])
+def record_feedback():
+    data = request.json or {}
+    job_id = data.get('job_id', '')
+    outcome = data.get('outcome', '')
+    if not job_id or outcome not in ('positive', 'negative'):
+        return jsonify({"error": "Provide job_id and outcome (positive|negative)"}), 400
+    try:
+        from agent.ranking.feedback_ranker import FeedbackRanker
+        orch = get_orchestrator()
+        listing = next((j for j in orch.jobs_raw if j.get("id") == job_id), {})
+        ranker = FeedbackRanker(data_path=str(DATA_DIR / "feedback_signals.json"))
+        ranker.record_outcome(job_id=job_id, listing=listing, outcome=outcome)
+        _broadcast_event("feedback_recorded", {"job_id": job_id, "outcome": outcome})
+        return jsonify({"status": "recorded", "job_id": job_id, "outcome": outcome})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/analytics/overview', methods=['GET'])
 def analytics_overview():
     try:
@@ -752,39 +771,170 @@ def outreach():
     data = request.json or {}
     job_id = data.get('job_id', '')
     company = data.get('company', '')
-    contact_name = data.get('contact_name', 'Hiring Manager')
-    platform = data.get('platform', 'linkedin')
-    archetype = data.get('archetype', 'AI Engineering')
+    domain = data.get('domain', '')
+    job_description = data.get('job_description', '')
+    archetype = data.get('archetype', 'agentic_automation')
 
     try:
         orch = get_orchestrator()
-        name = orch.candidate_profile.get("personal_details", {}).get("name", "")
 
-        if platform == "linkedin":
-            message = (
-                f"Hi {contact_name},\n\n"
-                f"I came across the {data.get('title', 'role')} at {company} and it immediately caught my attention. "
-                f"I've been building in {archetype} and the problems your team is solving align directly with "
-                f"where I've been focusing my work.\n\n"
-                f"I'd love to connect briefly to learn more about the team. Would you be open to a quick chat?\n\n"
-                f"Best,\n{name}"
-            )
-        else:
-            message = (
-                f"Hi {contact_name},\n\n"
-                f"I'm reaching out regarding the {data.get('title', 'position')} at {company}. "
-                f"My background in {archetype} maps closely to what you're building.\n\n"
-                f"Happy to share more. Let me know if a brief call makes sense.\n\n"
-                f"Best,\n{name}"
-            )
+        job_meta = {}
+        if job_id:
+            job_meta = next((j for j in orch.jobs_raw if j.get("id") == job_id), {})
+            if not job_description:
+                job_description = job_meta.get("description", "")
+            if not company:
+                company = job_meta.get("company", "")
+            if not domain:
+                domain = job_meta.get("domain", "")
+
+        contact = None
+        hunter_key = os.environ.get("HUNTER_API_KEY", "")
+        lookup_domain = domain or (company.lower().replace(" ", "") + ".com" if company else "")
+        if hunter_key and lookup_domain:
+            try:
+                from agent.outreach.contact_lookup import ContactLookup
+                lkp = ContactLookup(api_key=hunter_key)
+                contact = lkp.lookup(lookup_domain)
+            except Exception as _le:
+                logging.warning(f"Hunter.io lookup failed: {_le}")
+
+        if contact is None:
+            contact = {
+                "name": data.get('contact_name', ''),
+                "title": data.get('contact_title', ''),
+                "email": data.get('contact_email', ''),
+                "confidence": 0,
+                "domain": lookup_domain,
+            }
+
+        from agent.mcp_server import _handle_score_job_fit
+        candidate_skills = (
+            orch.candidate_profile.get("skills", {}).get("primary", []) +
+            orch.candidate_profile.get("skills", {}).get("secondary", [])
+        )
+        fit = {}
+        if job_description:
+            fit = _handle_score_job_fit({"job_description": job_description, "candidate_skills": candidate_skills})
+
+        evaluation_ctx = {
+            "archetype": archetype,
+            "matched_skills": fit.get("matched_skills", []),
+            "missing_skills": fit.get("missing_skills", []),
+            "quality_gate": fit.get("quality_gate", {"final_score": 80}),
+        }
+
+        from agent.outreach.email_generator import EmailGenerator
+        gen = EmailGenerator()
+        result = gen.generate(
+            profile=orch.candidate_profile,
+            job_meta={**job_meta, "company": company, "description": job_description},
+            contact=contact,
+            evaluation=evaluation_ctx,
+        )
 
         return jsonify({
-            "platform": platform,
-            "contact": contact_name,
-            "company": company,
-            "message": message,
-            "character_count": len(message)
+            "subject": result.get("subject", ""),
+            "body": result.get("body", ""),
+            "contact": contact,
+            "matched_skills": fit.get("matched_skills", []),
+            "archetype": archetype,
+            "word_count": result.get("word_count", 0),
         })
+    except Exception as e:
+        logging.exception("outreach error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/discover', methods=['POST'])
+def discover():
+    data = request.json or {}
+    sources = data.get('sources', ['remoteok', 'linkedin'])
+    top_n = int(data.get('top_n', 5))
+    keywords = data.get('keywords', 'AI engineer LLM machine learning agentic')
+
+    try:
+        from agent.digest.daily_digest import DailyDigest
+        orch = get_orchestrator()
+        candidate_skills = (
+            orch.candidate_profile.get("skills", {}).get("primary", []) +
+            orch.candidate_profile.get("skills", {}).get("secondary", [])
+        )
+
+        digest = DailyDigest(
+            candidate_skills=candidate_skills,
+            linkedin_keywords=keywords,
+            top_n=top_n,
+            output_dir=str(BASE_DIR / "output"),
+        )
+        result = digest.run()
+
+        _broadcast_event("discovery_complete", {
+            "total": result["remoteok_count"] + result["linkedin_count"],
+            "top_n": len(result["top_jobs"]),
+        })
+
+        return jsonify({
+            "remoteok_count": result["remoteok_count"],
+            "linkedin_count": result["linkedin_count"],
+            "top_jobs": result["top_jobs"],
+            "saved_to": result["saved_to"],
+            "notifications": result["notifications"],
+        })
+    except Exception as e:
+        logging.exception("discover error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/approve', methods=['POST'])
+def approve():
+    data = request.json or {}
+    url = data.get('url', '')
+    title = data.get('title', '')
+    company = data.get('company', '')
+    mode = data.get('mode', 'draft')
+    cv_path = data.get('cv_path', '')
+
+    if not url:
+        return jsonify({"error": "Missing url"}), 400
+
+    try:
+        orch = get_orchestrator()
+
+        if orch.ledger.already_applied(url, company, title):
+            return jsonify({"status": "duplicate_blocked", "message": "Already applied to this role"})
+
+        result = orch.start_from_url(
+            apply_url=url,
+            mode=mode,
+            cv_path=cv_path or 'CVs/My CVc.md',
+            title=title,
+            company=company,
+        )
+
+        if result.get("status") in ("submitted", "draft_saved"):
+            from agent.tracker.followup_tracker import FollowUpTracker
+            tracker = FollowUpTracker(storage_path=str(DATA_DIR / "followups.json"))
+            candidate_name = orch.candidate_profile.get("personal_details", {}).get("name", "")
+            tracker.track(
+                job_id=result.get("job_id", ""),
+                company=company,
+                title=title,
+                archetype=result.get("archetype", ""),
+            )
+
+        _broadcast_event("application_approved", {"url": url, "status": result.get("status")})
+        return jsonify(result)
+    except Exception as e:
+        logging.exception("approve error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/applications', methods=['GET'])
+def list_applications():
+    try:
+        orch = get_orchestrator()
+        return jsonify({"applications": orch.ledger.all(), "stats": orch.ledger.stats()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
