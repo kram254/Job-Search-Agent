@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -22,8 +23,10 @@ class PipelineManager:
 
     def _save(self) -> None:
         self.pipeline_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.pipeline_path, "w") as f:
+        tmp = str(self.pipeline_path) + ".tmp"
+        with open(tmp, "w") as f:
             json.dump(self.entries, f, indent=2)
+        os.replace(tmp, str(self.pipeline_path))
 
     def add(self, url: str, title: str = "", company: str = "",
             priority: int = 0, metadata: Optional[Dict[str, Any]] = None) -> str:
