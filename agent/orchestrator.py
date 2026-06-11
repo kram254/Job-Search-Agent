@@ -84,7 +84,13 @@ class ApplicationOrchestrator:
 
         self.logger = Logger(logs_dir=LOGS_DIR)
 
-        self.browser = BrowserWrapper(headless=False)
+        from agent.tracker.application_ledger import ApplicationLedger
+        from agent.tracker.status_machine import StatusMachine
+        self.ledger = ApplicationLedger(ledger_path=str(DATA_DIR / "applications.json"))
+        self.status_machine = StatusMachine()
+
+        _headless = os.environ.get("BROWSER_HEADLESS", "true").lower() != "false"
+        self.browser = BrowserWrapper(headless=_headless)
 
         self.platform_handlers: Dict[str, BasePlatformHandler] = {}
         self.current_evaluation: Optional[JobEvaluation] = None
@@ -155,14 +161,18 @@ class ApplicationOrchestrator:
         Very simple detection based on hostname patterns.
         Returns a string identifier that maps to a concrete PlatformHandler class.
         """
-        hostname = url.split("/")[2].lower()
+        try:
+            hostname = url.split("/")[2].lower()
+        except IndexError:
+            return "generic"
         if "greenhouse" in hostname or "grnh.se" in hostname:
             return "greenhouse"
         if "linkedin" in hostname:
             return "linkedin"
         if "indeed" in hostname:
             return "indeed"
-        # Add more mappings as you create handlers …
+        if "ashby" in hostname or "ashbyhq" in hostname:
+            return "ashby"
         return "generic"
 
     def _get_or_create_handler(self, platform_name: str) -> BasePlatformHandler:
@@ -173,13 +183,16 @@ class ApplicationOrchestrator:
         if platform_name in self.platform_handlers:
             return self.platform_handlers[platform_name]
 
+        from agent.platforms.ashby import AshbyHandler
         handler_class_map = {
             "greenhouse": GreenhouseHandler,
             "linkedin": LinkedInHandler,
             "indeed": IndeedHandler,
+            "ashby": AshbyHandler,
+            "generic": GreenhouseHandler,
         }
         if platform_name not in handler_class_map:
-            raise ValueError(f"Unsupported platform: {platform_name}")
+            platform_name = "generic"
 
         handler = handler_class_map[platform_name]()
         self.platform_handlers[platform_name] = handler
@@ -256,20 +269,26 @@ class ApplicationOrchestrator:
         """
         # Simple heuristic – pick the PDF that matches the most required skills
         # (real logic would live in a dedicated CV‑matching module)
-        preferred_pdf = self._pick_preferred_cv()
+        archetype = self.current_evaluation.archetype.value if self.current_evaluation else "unknown"
+        jd = getattr(self, "job_meta", {}).get("description", "")
+        preferred_pdf = self._pick_preferred_cv(archetype=archetype, job_description=jd)
         logging.info(f"[Session {handler.session_id}] Selected CV: {preferred_pdf}")
         handler.selected_cv_path = preferred_pdf
 
-    def _pick_preferred_cv(self) -> str:
-        profile = self.candidate_profile
-        pdf_paths = profile.get("cv_variants", {}).get("pdf_paths", [])
-        if pdf_paths:
-            return pdf_paths[0]
-        md_paths = profile.get("cv_variants", {}).get("paths", [])
-        if md_paths:
-            return md_paths[0]
-        default_cv = self.hitl_config.get("default_cv", "CVs/SoftwareDevCV.pdf")
-        return default_cv
+    def _pick_preferred_cv(self, archetype: str = "unknown", job_description: str = "") -> str:
+        from agent.services.cv_selector import select_cv_variant
+        variant = select_cv_variant(
+            candidate_profile=self.candidate_profile,
+            archetype=archetype,
+            job_description=job_description,
+        )
+        pdf = variant.get("pdf_path", "")
+        if pdf and Path(pdf).exists():
+            return pdf
+        md = variant.get("md_path", "")
+        if md and Path(md).exists():
+            return md
+        return self.hitl_config.get("default_cv", "CVs/SoftwareDevCV.pdf")
 
     def _fill_single_field(self, field_id: str, value: str) -> None:
         handler = getattr(self, "current_handler", None)
@@ -394,6 +413,13 @@ class ApplicationOrchestrator:
             job_meta = existing
         else:
             self.jobs_raw.append(job_meta)
+            try:
+                import json as _json
+                _jobs_path = DATA_DIR / "jobs_raw.json"
+                with open(str(_jobs_path), "w", encoding="utf-8") as _f:
+                    _json.dump(self.jobs_raw, _f, indent=2)
+            except Exception as _e:
+                logging.warning(f"[start_from_url] Could not persist jobs_raw: {_e}")
         return self.run_apply_mode(
             job_id=job_meta["id"],
             apply_url=apply_url,
@@ -430,7 +456,6 @@ class ApplicationOrchestrator:
         session_id = self._new_session_id()
         logging.info(f"[Apply Mode {session_id}] Starting for job_id={job_id}")
 
-        # Resolve job metadata
         job_meta = next((j for j in self.jobs_raw if j["id"] == job_id), None)
         if not job_meta:
             raise ValueError(f"Job ID {job_id} not found in jobs_raw.json")
@@ -438,6 +463,16 @@ class ApplicationOrchestrator:
 
         job_description = job_meta.get("description", "")
         company_name = job_meta.get("company", "unknown")
+
+        if self.ledger.already_applied(apply_url, company_name, job_meta.get("title", "")):
+            logging.warning(f"[Apply Mode] Duplicate blocked for {apply_url}")
+            return {
+                "session_id": session_id,
+                "job_id": job_id,
+                "status": "duplicate_blocked",
+                "message": "Already applied to this role",
+                "company": company_name,
+            }
 
         # Step 1: Evaluate job (archetype detection + A-F scoring)
         self._evaluate_job_for_apply(job_description, cv_path)
@@ -451,8 +486,12 @@ class ApplicationOrchestrator:
 
         # Step 2 & 3: Generate tailored CV PDF
         try:
+            from agent.services.cv_selector import select_cv_variant
+            _archetype_val = self.current_evaluation.archetype.value if self.current_evaluation else "unknown"
+            _best_variant = select_cv_variant(self.candidate_profile, _archetype_val, job_description)
+            _base_md = _best_variant.get("md_path", cv_path) or cv_path
             pdf_result = self.pdf_generator.generate_tailored_cv(
-                cv_markdown_path=cv_path,
+                cv_markdown_path=_base_md,
                 job_description=job_description,
                 candidate_profile=self.candidate_profile,
                 archetype=self.current_evaluation.archetype.value if self.current_evaluation else "general",
@@ -480,16 +519,31 @@ class ApplicationOrchestrator:
 
         result = self._run_apply_workflow(handler, final_url, resolved_mode)
 
+        final_status = result.get("status", "unknown")
+        _archetype_val = self.current_evaluation.archetype.value if self.current_evaluation else "unknown"
+        if final_status in ("submitted", "draft_saved"):
+            ok, ledger_status, _ = self.status_machine.transition("queued", "applied")
+            self.ledger.record(
+                url=apply_url,
+                job_id=job_id,
+                company=company_name,
+                title=job_meta.get("title", ""),
+                archetype=_archetype_val,
+                cv_used=self.tailored_cv_path or "",
+                session_id=session_id,
+                status=ledger_status if ok else "applied",
+            )
+
         return {
             "session_id": session_id,
             "job_id": job_id,
-            "status": result.get("status", "unknown"),
+            "status": final_status,
             "mode": resolved_mode,
             "evaluation": self._get_evaluation_summary(),
             "interview_prep": interview_prep,
             "cv_path": self.tailored_cv_path,
             "company": company_name,
-            "archetype": self.current_evaluation.archetype.value if self.current_evaluation else "unknown",
+            "archetype": _archetype_val,
             "draft_screenshot": result.get("draft_screenshot"),
             "draft_session_path": result.get("draft_session_path"),
             "fields_filled": result.get("fields_filled", 0),
@@ -519,12 +573,28 @@ class ApplicationOrchestrator:
             logging.info(f"[Eval Block {block_name}] Score: {block.score:.1f} - {block.reasoning}")
 
     def _prepare_interview_stories(self) -> Dict[str, Any]:
-        """Prepare STAR+R interview stories based on archetype."""
         if not self.current_evaluation:
             return {"stories": [], "themes": []}
 
-        stories = self.current_evaluation.interview_stories
         archetype = self.current_evaluation.archetype.value
+
+        from agent.tracker.story_bank import StoryBank
+        bank = StoryBank(storage_path=str(DATA_DIR / "story_bank.json"))
+        banked = bank.lookup(archetype=archetype, limit=3)
+
+        profile_proofs = self.candidate_profile.get("proof_points", [])
+        proof_stories = []
+        for pp in profile_proofs:
+            if pp.get("archetype") == archetype or not pp.get("archetype"):
+                proof_stories.append({
+                    "situation": pp.get("context", ""),
+                    "task": "Deliver measurable impact",
+                    "action": pp.get("context", ""),
+                    "result": pp.get("metric", ""),
+                    "reflection": "",
+                })
+
+        stories = banked if banked else (proof_stories if proof_stories else self.current_evaluation.interview_stories)
 
         # Format for human review
         formatted_stories = []
@@ -680,6 +750,11 @@ class ApplicationOrchestrator:
             handler.session_id = session_id
             handler.logger = self.logger
 
+            field_mappings = draft_data.get("field_mappings", [])
+            if field_mappings:
+                self.job_meta = draft_data.get("job_meta", {})
+                self._fill_form(handler, field_mappings, mode=APPLICATION_MODE_AUTO)
+
             handler.submit_application(self.browser)
 
             draft_data["status"] = "submitted"
@@ -722,6 +797,23 @@ class ApplicationOrchestrator:
             value = mapping["candidate_value"]
             needs_hitl = mapping["requires_hitl"]
             reason = mapping.get("hitl_reason", "")
+            field_type = mapping.get("type", "")
+
+            if field_type == "file" or any(k in fid.lower() for k in ("resume", "cv_file", "upload", "attachment")):
+                cv_path = getattr(handler, "selected_cv_path", None)
+                if cv_path:
+                    try:
+                        success = handler.upload_resume(self.browser.page, cv_path)
+                        if success:
+                            filled += 1
+                        else:
+                            skipped += 1
+                    except Exception as _ue:
+                        logging.warning(f"[Fill] upload_resume failed for {fid}: {_ue}")
+                        skipped += 1
+                else:
+                    skipped += 1
+                continue
 
             if needs_hitl:
                 if mode == APPLICATION_MODE_AUTO:
@@ -827,33 +919,32 @@ class ApplicationOrchestrator:
     # 4️⃣ HITL plumbing – notifications & response handling
     # --------------------------------------------------------------------------- #
     def _emit_hitl_event(self, gate_id: str, message: str):
-        """
-        Sends a notification to the Flask UI (via POST to /gate-notify/<session_id>)
-        and logs the event locally.
-        """
-        # In a real implementation you would POST to the UI endpoint.
-        # For this skeleton we just log; the UI can poll for new response files.
         logging.info(f"[HITL EVENT] {gate_id}: {message}")
+        session_id = getattr(getattr(self, "current_handler", None), "session_id", "unknown")
+        pending_path = DATA_DIR / "gates" / f"{gate_id}_{session_id}.pending"
+        os.makedirs(str(DATA_DIR / "gates"), exist_ok=True)
+        with open(str(pending_path), "w") as f:
+            json.dump({"gate_id": gate_id, "message": message, "timestamp": datetime.utcnow().isoformat()}, f)
 
-        # Ensure the response file exists so the UI can read it
-        resp_path = DATA_DIR / f"gates/{gate_id}_{self.current_handler.session_id}.response"
-        os.makedirs(os.path.dirname(resp_path), exist_ok=True)
-        with open(resp_path, "w") as f:
-            f.write("{}")  # empty JSON placeholder
-
-    def _wait_for_gate_response(self):
-        """
-        Blocks until a `.response` file appears in the gates directory.
-        This is a naive poll; in production you could use websockets or
-        a message queue.
-        """
+    def _wait_for_gate_response(self, timeout: int = 300):
         import time
-        resp_pattern = os.path.join(
-            DATA_DIR, "gates", f"{'*'}_{self.current_handler.session_id}.response"
-        )
-        while not any(os.path.exists(f) for f in os.listdir(os.path.dirname(resp_pattern))):
-            time.sleep(1)  # simple back‑off
-        logging.debug("[Session] Gate response received – proceeding")
+        import glob
+        session_id = getattr(getattr(self, "current_handler", None), "session_id", "unknown")
+        gates_dir = str(DATA_DIR / "gates")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            pattern = os.path.join(gates_dir, f"*_{session_id}.response")
+            for resp_file in glob.glob(pattern):
+                try:
+                    with open(resp_file) as f:
+                        data = json.load(f)
+                    if data:
+                        logging.debug(f"[Session] Gate response received: {resp_file}")
+                        return
+                except Exception:
+                    pass
+            time.sleep(1)
+        logging.warning(f"[HITL] Gate timed out after {timeout}s — continuing")
 
     # --------------------------------------------------------------------------- #
     # 5️⃣ Checkpoint helpers
@@ -869,7 +960,7 @@ class ApplicationOrchestrator:
 
         checkpoint = {
             "url": self.browser.page.url,
-            "cookies": self.browser.context.cookies,
+            "cookies": self.browser.context.cookies(),
             "step": step,
             "timestamp": datetime.utcnow().isoformat()
         }
