@@ -19,6 +19,8 @@ class BasePlatformHandler(ABC):
     def submit_application(self, browser):
         pass
 
+    def upload_resume(self, page, cv_path: str) -> bool:
+        return False
+
     def get_human_filled_value(self, field_id: str) -> str:
-        # Placeholder for retrieving values from HITL gate
         return ""
