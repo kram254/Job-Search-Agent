@@ -189,3 +189,119 @@ class EmailNotifier:
         except Exception as e:
             logger.error(f"Email send failed: {e}")
             return False
+
+
+class ComposioNotifier:
+    _COMPOSIO_BASE = "https://backend.composio.dev"
+
+    _ACTION_MAP = {
+        "telegram": "TELEGRAM_SEND_MESSAGE",
+        "slack":    "SLACK_SEND_MESSAGE",
+        "whatsapp": "WHATSAPP_SEND_MESSAGE",
+        "gmail":    "GMAIL_SEND_EMAIL",
+        "discord":  "DISCORD_SEND_MESSAGE",
+    }
+
+    def __init__(
+        self,
+        api_key:   Optional[str] = None,
+        entity_id: Optional[str] = None,
+    ):
+        self._api_key   = api_key   or os.environ.get("COMPOSIO_API_KEY",   "")
+        self._entity_id = entity_id or os.environ.get("COMPOSIO_ENTITY_ID", "default")
+
+    def _headers(self) -> dict:
+        return {"x-api-key": self._api_key, "Content-Type": "application/json"}
+
+    def execute_action(self, action_id: str, input_data: dict) -> bool:
+        if not self._api_key:
+            logger.warning("ComposioNotifier: COMPOSIO_API_KEY not set")
+            return False
+        url = f"{self._COMPOSIO_BASE}/api/v2/actions/{action_id}/execute"
+        payload = {"entityId": self._entity_id, "input": input_data}
+        try:
+            resp = requests.post(url, json=payload, headers=self._headers(), timeout=20)
+            resp.raise_for_status()
+            logger.info(f"Composio {action_id} executed successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Composio action {action_id} failed: {e}")
+            return False
+
+    def send_telegram(self, jobs: List[Dict[str, Any]], intro: str = "",
+                      chat_id: Optional[str] = None) -> bool:
+        cid = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
+        if not cid:
+            logger.warning("ComposioNotifier.send_telegram: TELEGRAM_CHAT_ID not set")
+            return False
+        text = _format_plain(jobs, intro)
+        return self.execute_action("TELEGRAM_SEND_MESSAGE", {
+            "chat_id":    cid,
+            "text":       text,
+            "parse_mode": "HTML",
+        })
+
+    def send_slack(self, jobs: List[Dict[str, Any]], intro: str = "",
+                   channel: Optional[str] = None) -> bool:
+        ch = channel or os.environ.get("SLACK_CHANNEL", "")
+        if not ch:
+            logger.warning("ComposioNotifier.send_slack: SLACK_CHANNEL not set")
+            return False
+        text = _format_plain(jobs, intro)
+        return self.execute_action("SLACK_SEND_MESSAGE", {"channel": ch, "text": text})
+
+    def send_whatsapp(self, jobs: List[Dict[str, Any]], intro: str = "",
+                      to_number: Optional[str] = None) -> bool:
+        to = to_number or os.environ.get("WHATSAPP_TO", "")
+        if not to:
+            logger.warning("ComposioNotifier.send_whatsapp: WHATSAPP_TO not set")
+            return False
+        text = _format_plain(jobs, intro)
+        return self.execute_action("WHATSAPP_SEND_MESSAGE", {"to": to, "text": text})
+
+    def send_gmail(self, jobs: List[Dict[str, Any]], intro: str = "",
+                   to_email: Optional[str] = None, subject: str = "") -> bool:
+        to = to_email or os.environ.get("DIGEST_TO_EMAIL", "")
+        if not to:
+            logger.warning("ComposioNotifier.send_gmail: DIGEST_TO_EMAIL not set")
+            return False
+        return self.execute_action("GMAIL_SEND_EMAIL", {
+            "to":      to,
+            "subject": subject or "Daily AI/ML Job Digest",
+            "body":    _format_html(jobs, intro),
+            "is_html": True,
+        })
+
+    def send(self, jobs: List[Dict[str, Any]], intro: str = "") -> bool:
+        tg  = self.send_telegram(jobs, intro=intro)
+        sl  = self.send_slack(jobs, intro=intro)
+        return tg or sl
+
+    def get_connections(self) -> List[Dict]:
+        if not self._api_key:
+            return []
+        try:
+            resp = requests.get(
+                f"{self._COMPOSIO_BASE}/api/v1/connectedAccounts",
+                headers=self._headers(), timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json().get("items", [])
+        except Exception as e:
+            logger.error(f"ComposioNotifier.get_connections failed: {e}")
+            return []
+
+    def get_connection_url(self, app_name: str) -> Optional[str]:
+        if not self._api_key:
+            return None
+        try:
+            resp = requests.post(
+                f"{self._COMPOSIO_BASE}/api/v1/connectedAccounts",
+                json={"appName": app_name.lower(), "entityId": self._entity_id},
+                headers=self._headers(), timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json().get("redirectUrl")
+        except Exception as e:
+            logger.error(f"ComposioNotifier.get_connection_url({app_name}) failed: {e}")
+            return None
