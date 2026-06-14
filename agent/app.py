@@ -654,6 +654,120 @@ def track_followup():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/providers', methods=['GET'])
+def list_providers():
+    try:
+        from agent.llm.llm_client import LLMClient
+        client = LLMClient()
+        return jsonify(client.provider_status())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/models', methods=['GET'])
+def list_models():
+    source = request.args.get('source', 'all')
+    try:
+        from agent.llm.llm_client import LLMClient
+        client = LLMClient()
+        result: dict = {}
+        if source in ('all', 'openrouter'):
+            category = request.args.get('category', '')
+            result['openrouter'] = client.list_openrouter_models(category or None)
+        if source in ('all', 'ollama'):
+            result['ollama'] = client.list_ollama_models()
+        if source == 'all':
+            result['hermes'] = {
+                'openrouter': LLMClient.HERMES_OR_MODEL,
+                'ollama':     LLMClient.HERMES_OLLAMA_MODEL,
+            }
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/llm/complete', methods=['POST'])
+def llm_complete():
+    data = request.json or {}
+    prompt   = data.get('prompt', '')
+    system   = data.get('system', '')
+    provider = data.get('provider', '')
+    model    = data.get('model', '')
+    max_tokens  = int(data.get('max_tokens', 1024))
+    temperature = float(data.get('temperature', 0.3))
+    if not prompt:
+        return jsonify({"error": "Missing prompt"}), 400
+    try:
+        from agent.llm.llm_client import LLMClient
+        client = LLMClient()
+        if provider:
+            result = client.complete_with_provider(
+                provider, prompt, system=system,
+                max_tokens=max_tokens, temperature=temperature,
+                model=model or None,
+            )
+        else:
+            result = client.complete(prompt, system=system, max_tokens=max_tokens, temperature=temperature)
+        return jsonify({"result": result, "provider": provider or client.provider()})
+    except Exception as e:
+        logging.exception("llm/complete error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/composio/connect', methods=['POST'])
+def composio_connect():
+    data = request.json or {}
+    app_name = data.get('app', '')
+    if not app_name:
+        return jsonify({"error": "Missing app name (e.g. telegram, slack, gmail)"}), 400
+    try:
+        from agent.digest.notifier import ComposioNotifier
+        cn = ComposioNotifier()
+        redirect_url = cn.get_connection_url(app_name)
+        if redirect_url:
+            return jsonify({"app": app_name, "connect_url": redirect_url})
+        return jsonify({"error": "Could not get connection URL. Check COMPOSIO_API_KEY."}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/composio/connections', methods=['GET'])
+def composio_connections():
+    try:
+        from agent.digest.notifier import ComposioNotifier
+        cn = ComposioNotifier()
+        return jsonify({"connections": cn.get_connections()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/composio/send', methods=['POST'])
+def composio_send():
+    data = request.json or {}
+    channel  = data.get('channel', 'telegram')
+    jobs     = data.get('jobs', [])
+    intro    = data.get('intro', '')
+    target   = data.get('target', '')
+    if not jobs:
+        return jsonify({"error": "Provide jobs list"}), 400
+    try:
+        from agent.digest.notifier import ComposioNotifier
+        cn = ComposioNotifier()
+        if channel == 'telegram':
+            ok = cn.send_telegram(jobs, intro=intro, chat_id=target or None)
+        elif channel == 'slack':
+            ok = cn.send_slack(jobs, intro=intro, channel=target or None)
+        elif channel == 'whatsapp':
+            ok = cn.send_whatsapp(jobs, intro=intro, to_number=target or None)
+        elif channel == 'gmail':
+            ok = cn.send_gmail(jobs, intro=intro, to_email=target or None)
+        else:
+            return jsonify({"error": f"Unknown channel '{channel}'. Use telegram|slack|whatsapp|gmail"}), 400
+        return jsonify({"channel": channel, "sent": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/feedback', methods=['POST'])
 def record_feedback():
     data = request.json or {}
