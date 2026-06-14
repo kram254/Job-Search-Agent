@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from agent.scraper.remoteok_scraper import fetch_remoteok
 from agent.scraper.linkedin_scraper import fetch_linkedin
-from agent.digest.notifier import TelegramNotifier, WhatsAppNotifier, EmailNotifier
+from agent.digest.notifier import TelegramNotifier, WhatsAppNotifier, EmailNotifier, ComposioNotifier
 
 logger = logging.getLogger("daily_digest")
 
@@ -52,6 +52,7 @@ class DailyDigest:
         telegram_notifier: Optional[TelegramNotifier] = None,
         whatsapp_notifier: Optional[WhatsAppNotifier] = None,
         email_notifier: Optional[EmailNotifier] = None,
+        composio_notifier: Optional[ComposioNotifier] = None,
     ):
         self._skills    = candidate_skills or []
         self._li_kw     = linkedin_keywords
@@ -61,6 +62,7 @@ class DailyDigest:
         self._telegram  = telegram_notifier  or TelegramNotifier()
         self._whatsapp  = whatsapp_notifier  or WhatsAppNotifier()
         self._email     = email_notifier     or EmailNotifier()
+        self._composio  = composio_notifier  or ComposioNotifier()
 
     def run(self) -> Dict[str, Any]:
         logger.info("DailyDigest: fetching RemoteOK...")
@@ -93,6 +95,9 @@ class DailyDigest:
             intro=intro,
             subject=f"Daily AI/ML Job Digest – {date_str}",
         )
+        composio_tg_ok  = self._composio.send_telegram(top_jobs, intro=intro)
+        composio_sl_ok  = self._composio.send_slack(top_jobs, intro=intro)
+        composio_wa_ok  = self._composio.send_whatsapp(top_jobs, intro=intro)
 
         return {
             "date":           date_str,
@@ -101,8 +106,11 @@ class DailyDigest:
             "top_jobs":       top_jobs,
             "saved_to":       saved_path,
             "notifications": {
-                "telegram":  telegram_ok,
-                "whatsapp":  whatsapp_ok,
-                "email":     email_ok,
+                "telegram":         telegram_ok,
+                "whatsapp":         whatsapp_ok,
+                "email":            email_ok,
+                "composio_telegram": composio_tg_ok,
+                "composio_slack":    composio_sl_ok,
+                "composio_whatsapp": composio_wa_ok,
             },
         }
