@@ -31,7 +31,7 @@ jobs:
       name: production
       url: https://job-search-backend.onrender.com
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Trigger Render deploy hook
         env:
