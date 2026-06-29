@@ -162,7 +162,7 @@ class EmailNotifier:
         to_addr: Optional[str] = None,
     ):
         self._host     = smtp_host     or os.environ.get("SMTP_HOST", "smtp.gmail.com")
-        self._port     = smtp_port     or int(os.environ.get("SMTP_PORT", "465"))
+        self._port     = smtp_port     or int(os.environ.get("SMTP_PORT") or "465")
         self._user     = smtp_user     or os.environ.get("SMTP_USER", "")
         self._password = smtp_password or os.environ.get("SMTP_PASSWORD", "")
         self._from     = from_addr     or os.environ.get("DIGEST_FROM_EMAIL", self._user)
