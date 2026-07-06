@@ -11,9 +11,9 @@ class LLMClient:
     ANTHROPIC_MODEL      = os.environ.get("ANTHROPIC_MODEL",      "claude-opus-4-5")
     GEMINI_MODEL         = os.environ.get("GEMINI_MODEL",         "gemini-1.5-flash")
     GEMINI_VISION_MODEL  = os.environ.get("GEMINI_VISION_MODEL",  "gemini-1.5-flash")
-    OPENROUTER_MODEL     = os.environ.get("OPENROUTER_MODEL",     "nousresearch/hermes-3-llama-3.1-70b")
+    OPENROUTER_MODEL     = os.environ.get("OPENROUTER_MODEL",     "meta-llama/llama-3.3-70b-instruct:free")
     OLLAMA_MODEL         = os.environ.get("OLLAMA_MODEL",         "nous-hermes2")
-    HERMES_OR_MODEL      = "nousresearch/hermes-3-llama-3.1-70b"
+    HERMES_OR_MODEL      = "meta-llama/llama-3.3-70b-instruct"
     HERMES_OLLAMA_MODEL  = "nous-hermes2"
     OPENROUTER_BASE      = "https://openrouter.ai"
     COMPOSIO_BASE        = "https://backend.composio.dev"
@@ -43,6 +43,7 @@ class LLMClient:
         self._default_provider  = os.environ.get("LLM_PROVIDER", "").lower().strip()
 
         self._anthropic_client  = None
+        self._anthropic_available  = bool(self.anthropic_api_key)
         self._gemini_available  = bool(self.gemini_api_key)
         self._openrouter_available = bool(self.openrouter_api_key)
         self._ollama_available  = self._probe_ollama()
@@ -95,14 +96,21 @@ class LLMClient:
                 try:
                     return self._gemini_complete(prompt, system, max_tokens, temperature)
                 except Exception as e:
-                    logger.warning(f"Gemini failed for step '{step}', falling back to Anthropic: {e}")
+                    logger.warning(f"Gemini failed for step '{step}', falling back: {e}")
+            if self._anthropic_available:
+                return self._anthropic_complete(prompt, system, max_tokens, temperature)
+            if self._openrouter_available:
+                return self._openrouter_complete(prompt, system, max_tokens, temperature)
             return self._anthropic_complete(prompt, system, max_tokens, temperature)
+        if not self._anthropic_available and self._openrouter_available:
+            logger.info("ANTHROPIC_API_KEY not set — routing to OpenRouter")
+            return self._openrouter_complete(prompt, system, max_tokens, temperature)
         try:
             return self._anthropic_complete(prompt, system, max_tokens, temperature)
         except Exception as e:
             err = str(e).lower()
-            if any(kw in err for kw in ("quota", "rate_limit", "overloaded", "529")):
-                logger.warning(f"Anthropic quota/rate error, trying fallback: {e}")
+            if any(kw in err for kw in ("quota", "rate_limit", "overloaded", "529", "authentication", "invalid_api_key")):
+                logger.warning(f"Anthropic error, trying fallback: {e}")
                 if self._openrouter_available:
                     return self._openrouter_complete(prompt, system, max_tokens, temperature)
                 if self._gemini_available:
@@ -306,15 +314,19 @@ class LLMClient:
             return []
 
     def provider_status(self) -> Dict[str, Any]:
+        active = (
+            "openrouter" if not self._anthropic_available and self._openrouter_available
+            else self._default_provider or "anthropic (step-based routing)"
+        )
         return {
-            "anthropic":   {"available": bool(self.anthropic_api_key),  "model": self.ANTHROPIC_MODEL},
-            "gemini":      {"available": self._gemini_available,         "model": self.GEMINI_MODEL},
-            "openrouter":  {"available": self._openrouter_available,     "model": self.OPENROUTER_MODEL},
-            "ollama":      {"available": self._ollama_available,         "model": self.OLLAMA_MODEL,
+            "anthropic":   {"available": self._anthropic_available, "model": self.ANTHROPIC_MODEL},
+            "gemini":      {"available": self._gemini_available,    "model": self.GEMINI_MODEL},
+            "openrouter":  {"available": self._openrouter_available, "model": self.OPENROUTER_MODEL},
+            "ollama":      {"available": self._ollama_available,    "model": self.OLLAMA_MODEL,
                             "base_url": self.ollama_base_url},
             "hermes":      {"available": self._openrouter_available or self._ollama_available,
                             "routes_to": "openrouter" if self._openrouter_available else "ollama"},
-            "default_provider": self._default_provider or "anthropic (step-based routing)",
+            "active_provider": active,
         }
 
     def provider(self) -> str:

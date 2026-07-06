@@ -11,6 +11,10 @@ services:
         value: 10000
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: meta-llama/llama-3.3-70b-instruct:free
       - key: PYTHONPATH
         value: .
 
