@@ -11,7 +11,7 @@ services:
         value: 10000
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: PYTHON_PATH
+      - key: PYTHONPATH
         value: .
     disk:
       name: data-storage
@@ -21,9 +21,9 @@ services:
   - type: web
     name: job-search-frontend
     runtime: node
+    rootDir: frontend
     buildCommand: npm install && npm run build
     startCommand: npm start
-    publishDir: .next
     envVars:
       - key: NEXT_PUBLIC_API_URL
         fromService:

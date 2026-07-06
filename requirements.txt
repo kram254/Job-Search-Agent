@@ -2,7 +2,6 @@ flask
 flask-cors
 playwright
 anthropic
-pathlib
 pydantic
 gunicorn
 python-dotenv
