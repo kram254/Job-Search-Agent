@@ -16,7 +16,7 @@ services:
 
   - type: web
     name: job-search-frontend
-    runtime: node
+    env: node
     rootDir: frontend
     buildCommand: npm install && npm run build
     startCommand: npm start
