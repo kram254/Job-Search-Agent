@@ -54,6 +54,20 @@ def _broadcast_event(event_type: str, data: dict):
             _sse_clients.remove(q)
 
 
+@app.route('/', methods=['GET'])
+def index():
+    return jsonify({
+        "service": "job-search-agent",
+        "status": "healthy",
+        "endpoints": [
+            "/health", "/jobs", "/sessions", "/applications",
+            "/discover", "/approve", "/evaluate", "/outreach",
+            "/analytics/overview", "/analytics/patterns",
+            "/pipeline", "/follow-ups", "/providers", "/stream"
+        ]
+    })
+
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "healthy"})
