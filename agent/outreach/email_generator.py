@@ -175,6 +175,9 @@ class EmailGenerator:
                 "archetype": archetype,
             }
 
+        if not raw:
+            raw = self._build_template(profile, job_meta, contact, archetype, matched_skills)
+
         subject, body = self._parse_response(raw)
         word_count = len(body.split())
 
@@ -189,7 +192,45 @@ class EmailGenerator:
         }
 
     @staticmethod
+    def _build_template(
+        profile: Dict[str, Any],
+        job_meta: Dict[str, Any],
+        contact: Optional[Dict[str, Any]],
+        archetype: str,
+        matched_skills: List[str],
+    ) -> str:
+        name = profile.get("personal_details", {}).get("name", "Emmanuel Ndaliro").title()
+        github = profile.get("professional_profiles", {}).get("github", "")
+        linkedin = profile.get("professional_profiles", {}).get("linkedin", "")
+        company = job_meta.get("company", "your team")
+        title = job_meta.get("title", "this role")
+        skills_text = ", ".join(matched_skills[:4]) if matched_skills else "AI/ML systems"
+        proof_points = profile.get("proof_points", [])
+        proof = proof_points[0] if proof_points else {"metric": "90% reduction in processing time", "context": "agentic automation"}
+        recipient_name = (contact or {}).get("name", "")
+        first_name = recipient_name.split()[0] if recipient_name else ""
+        salutation = f"Hi {first_name}," if first_name else f"Hi {company} team,"
+
+        return f"""SUBJECT: {title} – {name} | {skills_text}
+
+{salutation}
+
+I came across the {title} opening at {company} and wanted to reach out directly.
+
+I'm an AI/ML engineer focused on {archetype.replace('_', ' ')} — I've achieved {proof['metric']} through {proof['context']}.
+
+My relevant background: {skills_text}. I build systems that ship to production, not just demos.
+
+Would you be open to a 15-minute call this week? Happy to share specific work samples relevant to what you're building.
+
+{name}
+{github}
+{linkedin}"""
+
+    @staticmethod
     def _parse_response(raw: str) -> tuple:
+        if not raw:
+            return "Application", ""
         lines = raw.strip().splitlines()
         subject = ""
         body_lines = []

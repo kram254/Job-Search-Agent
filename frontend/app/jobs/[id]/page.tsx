@@ -204,8 +204,38 @@ export default function JobDetail() {
               )}
               {!!evaluation.cv_tailoring && (
                 <div>
-                  <div className="text-xs text-slate-500 mb-2">CV Tailoring</div>
-                  <div className="text-sm text-slate-300 bg-slate-800/60 rounded-lg p-3">{String(evaluation.cv_tailoring)}</div>
+                  <div className="text-xs text-slate-500 mb-2">CV Tailoring Plan</div>
+                  {typeof evaluation.cv_tailoring === 'object' ? (
+                    <div className="space-y-2">
+                      {(evaluation.cv_tailoring as Record<string,unknown>).inject_keywords && (
+                        <div>
+                          <div className="text-xs text-slate-600 mb-1">Keywords to inject</div>
+                          <div className="flex flex-wrap gap-1">
+                            {((evaluation.cv_tailoring as Record<string,unknown>).inject_keywords as string[]).slice(0,8).map((k: string) => (
+                              <span key={k} className="text-xs bg-blue-950/50 text-blue-400 px-1.5 py-0.5 rounded border border-blue-900/50">{k}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {(evaluation.cv_tailoring as Record<string,unknown>).highlight_projects && (
+                        <div>
+                          <div className="text-xs text-slate-600 mb-1">Highlight projects</div>
+                          <div className="flex flex-wrap gap-1">
+                            {((evaluation.cv_tailoring as Record<string,unknown>).highlight_projects as string[]).slice(0,4).map((p: string) => (
+                              <span key={p} className="text-xs bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">{p}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div className="text-xs text-slate-500">
+                        Archetype: {String((evaluation.cv_tailoring as Record<string,unknown>).archetype ?? '—')}
+                        {(evaluation.cv_tailoring as Record<string,unknown>).summary_rewrite ? ' · Rewrite summary' : ''}
+                        {(evaluation.cv_tailoring as Record<string,unknown>).reorder_experience ? ' · Reorder experience' : ''}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-slate-300 bg-slate-800/60 rounded-lg p-3">{String(evaluation.cv_tailoring)}</div>
+                  )}
                 </div>
               )}
             </div>

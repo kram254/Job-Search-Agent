@@ -824,14 +824,10 @@ class PDFGenerator:
         pdf_path = self.output_dir / pdf_filename
 
         clean_html = re.sub(r'@import url\([^)]+\);?', '', html)
+        clean_html = re.sub(r'border-image:[^;]+;', '', clean_html)
         clean_html = re.sub(
             r'background:\s*linear-gradient\([^;]+\)',
             f'background: {self.COLOR_PRIMARY}',
-            clean_html
-        )
-        clean_html = re.sub(
-            r'border-image:\s*linear-gradient\([^;]+\)',
-            '',
             clean_html
         )
 
