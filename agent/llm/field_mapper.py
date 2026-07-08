@@ -127,9 +127,9 @@ class FieldMapper:
         "I'm selective about where I invest my energy"
     ]
 
-    STRONG_MATCH_THRESHOLD = 4.5
-    GOOD_MATCH_THRESHOLD = 4.0
-    DECENT_MATCH_THRESHOLD = 3.5
+    STRONG_MATCH_THRESHOLD = 4.0
+    GOOD_MATCH_THRESHOLD = 3.5
+    DECENT_MATCH_THRESHOLD = 3.0
 
     def __init__(self, candidate_profile: Dict[str, Any], job_description: str,
                  cv_text: str = "", archetype_preferences: Optional[List[str]] = None,
@@ -387,10 +387,12 @@ class FieldMapper:
         priority_matches = [s for s in matched_primary if any(p in s.lower() for p in priority_skills)]
 
         # Calculate score
+        n_primary = len(self.candidate_profile.get("skills", {}).get("primary", []))
+        baseline = min(3.0, 2.0 + (n_primary / 10) * 0.8)
         coverage = (len(matched_primary) + len(matched_secondary) * 0.5) / max(len(jd_skills), 1)
         priority_bonus = len(priority_matches) * 0.3
 
-        score = min(5.0, 2.0 + coverage * 2 + priority_bonus)
+        score = min(5.0, baseline + coverage * 2 + priority_bonus)
 
         evidence = [
             f"Primary skills matched: {matched_primary}",

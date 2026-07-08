@@ -11,15 +11,13 @@ Features:
 """
 
 import re
-import tempfile
 import os
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-# Playwright for PDF generation
-from playwright.sync_api import sync_playwright
+from xhtml2pdf import pisa
 
 
 @dataclass
@@ -49,8 +47,8 @@ class PDFGenerator:
     """
 
     # ATS-friendly fonts (self-hosted or system)
-    FONT_HEADING = "Space Grotesk, sans-serif"
-    FONT_BODY = "DM Sans, sans-serif"
+    FONT_HEADING = "Helvetica, sans-serif"
+    FONT_BODY = "Helvetica, sans-serif"
 
     # Design tokens from career-ops
     COLOR_PRIMARY = "hsl(187, 74%, 32%)"  # Cyan
@@ -821,66 +819,44 @@ class PDFGenerator:
         page_format: str,
         keywords: List[str]
     ) -> PDFGenerationResult:
-        """Convert HTML to PDF using Playwright."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         pdf_filename = f"cv_{company_name.lower().replace(' ', '_')}_{timestamp}.pdf"
         pdf_path = self.output_dir / pdf_filename
 
-        # Write HTML to temp file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
-            f.write(html)
-            html_path = f.name
+        clean_html = re.sub(r'@import url\([^)]+\);?', '', html)
+        clean_html = re.sub(
+            r'background:\s*linear-gradient\([^;]+\)',
+            f'background: {self.COLOR_PRIMARY}',
+            clean_html
+        )
+        clean_html = re.sub(
+            r'border-image:\s*linear-gradient\([^;]+\)',
+            '',
+            clean_html
+        )
 
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch()
-                page = browser.new_page()
+        with open(pdf_path, 'wb') as f:
+            pisa_status = pisa.CreatePDF(clean_html, dest=f, encoding='utf-8')
 
-                # Load HTML
-                page.goto(f"file://{html_path}", wait_until="networkidle")
+        if pisa_status.err:
+            raise RuntimeError(f"PDF generation failed: {pisa_status.err}")
 
-                # Wait for fonts
-                page.evaluate("() => document.fonts.ready")
+        file_size = pdf_path.stat().st_size / 1024
+        coverage = min(100.0, len(keywords) * 5)
 
-                # Generate PDF
-                pdf_buffer = page.pdf(
-                    format=page_format.upper(),
-                    print_background=True,
-                    margin={
-                        "top": "0.6in",
-                        "right": "0.6in",
-                        "bottom": "0.6in",
-                        "left": "0.6in"
-                    }
-                )
+        with open(pdf_path, 'rb') as f:
+            pdf_bytes = f.read()
+        pdf_str = pdf_bytes.decode('latin-1', errors='ignore')
+        page_count = max(len(re.findall(r'/Type\s*/Page[^s]', pdf_str)), 1)
 
-                browser.close()
-
-            # Write PDF
-            with open(pdf_path, 'wb') as f:
-                f.write(pdf_buffer)
-
-            # Get page count (approximate from PDF structure)
-            pdf_str = pdf_buffer.decode('latin-1', errors='ignore')
-            page_count = len(re.findall(r'/Type\s*/Page[^s]', pdf_str))
-
-            file_size = pdf_path.stat().st_size / 1024  # KB
-
-            # Calculate keyword coverage
-            coverage = min(100.0, len(keywords) * 5)  # 5% per keyword, max 100%
-
-            return PDFGenerationResult(
-                pdf_path=str(pdf_path),
-                page_count=max(page_count, 1),
-                file_size_kb=round(file_size, 1),
-                keywords_injected=keywords[:8],
-                coverage_percentage=coverage,
-                format_used=page_format
-            )
-
-        finally:
-            # Cleanup temp file
-            os.unlink(html_path)
+        return PDFGenerationResult(
+            pdf_path=str(pdf_path),
+            page_count=page_count,
+            file_size_kb=round(file_size, 1),
+            keywords_injected=keywords[:8],
+            coverage_percentage=coverage,
+            format_used=page_format
+        )
 
     def quick_generate(
         self,

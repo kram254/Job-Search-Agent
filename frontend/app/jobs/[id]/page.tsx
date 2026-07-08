@@ -164,14 +164,45 @@ export default function JobDetail() {
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
               <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Evaluation</h2>
               <div className="grid grid-cols-2 gap-3 mb-4">
-                {(['archetype', 'global_score', 'confidence', 'recommendation'] as const).map(k => (
-                  <div key={k} className="bg-slate-800/60 rounded-lg p-3">
-                    <div className="text-xs text-slate-500 mb-1">{k.replace(/_/g, ' ')}</div>
-                    <div className="text-sm text-white font-medium">{String(evaluation[k] ?? '—')}</div>
-                  </div>
-                ))}
+                {(['archetype', 'global_score', 'confidence', 'recommendation'] as const).map(k => {
+                  let display = String(evaluation[k] ?? '—')
+                  if (k === 'global_score' && evaluation[k] != null) {
+                    const pct = Math.round(Number(evaluation[k]) * 20)
+                    display = `${pct}/100`
+                  }
+                  if (k === 'confidence' && evaluation[k] != null) {
+                    display = `${Math.round(Number(evaluation[k]) * 100)}%`
+                  }
+                  const isScore = k === 'global_score'
+                  const pct = isScore ? Math.round(Number(evaluation[k]) * 20) : 0
+                  return (
+                    <div key={k} className="bg-slate-800/60 rounded-lg p-3">
+                      <div className="text-xs text-slate-500 mb-1">{k.replace(/_/g, ' ')}</div>
+                      <div className={`text-sm font-medium ${
+                        isScore
+                          ? pct >= 80 ? 'text-green-400' : pct >= 60 ? 'text-amber-400' : 'text-red-400'
+                          : 'text-white'
+                      }`}>{display}</div>
+                    </div>
+                  )
+                })}
               </div>
-              {evaluation.cv_tailoring && (
+              {evaluation.scores && (
+                <div className="mb-4">
+                  <div className="text-xs text-slate-500 mb-2">Block scores (A–G)</div>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(evaluation.scores as Record<string, {score: number; reasoning: string}>).map(([k, v]) => (
+                      <div key={k} title={v.reasoning} className="bg-slate-800 rounded-lg px-2 py-1 text-xs">
+                        <span className="text-slate-500">{k}: </span>
+                        <span className={v.score >= 4 ? 'text-green-400' : v.score >= 3 ? 'text-amber-400' : 'text-red-400'}>
+                          {v.score}/5
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!!evaluation.cv_tailoring && (
                 <div>
                   <div className="text-xs text-slate-500 mb-2">CV Tailoring</div>
                   <div className="text-sm text-slate-300 bg-slate-800/60 rounded-lg p-3">{String(evaluation.cv_tailoring)}</div>
@@ -184,12 +215,20 @@ export default function JobDetail() {
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
               <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Deep Research</h2>
               <div className="grid grid-cols-2 gap-3 mb-4">
-                {(['archetype', 'global_score', 'confidence', 'recommendation'] as const).map(k => (
-                  <div key={k} className="bg-slate-800/60 rounded-lg p-3">
-                    <div className="text-xs text-slate-500 mb-1">{k.replace(/_/g, ' ')}</div>
-                    <div className="text-sm text-white font-medium">{String(research[k] ?? '—')}</div>
-                  </div>
-                ))}
+                {(['archetype', 'global_score', 'confidence', 'recommendation'] as const).map(k => {
+                  let display = String(research[k] ?? '—')
+                  if (k === 'global_score' && research[k] != null) display = `${Math.round(Number(research[k]) * 20)}/100`
+                  if (k === 'confidence' && research[k] != null) display = `${Math.round(Number(research[k]) * 100)}%`
+                  const pct = k === 'global_score' ? Math.round(Number(research[k]) * 20) : 0
+                  return (
+                    <div key={k} className="bg-slate-800/60 rounded-lg p-3">
+                      <div className="text-xs text-slate-500 mb-1">{k.replace(/_/g, ' ')}</div>
+                      <div className={`text-sm font-medium ${k === 'global_score' ? pct >= 80 ? 'text-green-400' : pct >= 60 ? 'text-amber-400' : 'text-red-400' : 'text-white'}`}>
+                        {display}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
               {research.application_answer_why && (
                 <div className="mb-3">
