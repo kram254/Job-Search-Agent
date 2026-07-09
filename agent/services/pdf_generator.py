@@ -50,9 +50,10 @@ class PDFGenerator:
     FONT_HEADING = "Helvetica, sans-serif"
     FONT_BODY = "Helvetica, sans-serif"
 
-    # Design tokens from career-ops
-    COLOR_PRIMARY = "hsl(187, 74%, 32%)"  # Cyan
-    COLOR_ACCENT = "hsl(270, 70%, 45%)"   # Purple
+    COLOR_PRIMARY = "#14798a"
+    COLOR_ACCENT = "#7c3aed"
+    COLOR_PRIMARY_LIGHT = "#e8f4f6"
+    COLOR_ACCENT_LIGHT = "#ede9fe"
 
     # Section order optimized for "6-second scan"
     SECTION_ORDER = [
@@ -601,10 +602,11 @@ class PDFGenerator:
         /* Competencies */
         .competency {{
             display: inline-block;
-            background: linear-gradient(135deg, {self.COLOR_PRIMARY}15, {self.COLOR_ACCENT}15);
+            background: {self.COLOR_PRIMARY_LIGHT};
+            color: {self.COLOR_PRIMARY};
             padding: 3px 10px;
             margin: 2px;
-            border-radius: 12px;
+            border-radius: 6px;
             font-size: 10px;
             font-weight: 500;
         }}
@@ -825,11 +827,9 @@ class PDFGenerator:
 
         clean_html = re.sub(r'@import url\([^)]+\);?', '', html)
         clean_html = re.sub(r'border-image:[^;]+;', '', clean_html)
-        clean_html = re.sub(
-            r'background:\s*linear-gradient\([^;]+\)',
-            f'background: {self.COLOR_PRIMARY}',
-            clean_html
-        )
+        clean_html = re.sub(r'background:\s*linear-gradient\([^;]+\)', f'background: {self.COLOR_PRIMARY_LIGHT}', clean_html)
+        clean_html = re.sub(r'hsl\([^)]+\)', self.COLOR_PRIMARY, clean_html)
+        clean_html = re.sub(r'#[0-9a-fA-F]{8}\b', lambda m: m.group(0)[:7], clean_html)
 
         with open(pdf_path, 'wb') as f:
             pisa_status = pisa.CreatePDF(clean_html, dest=f, encoding='utf-8')
