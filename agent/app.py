@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, Response, stream_with_context
+from flask import Flask, request, jsonify, Response, stream_with_context, send_file
 from pathlib import Path
 import os
 import json
@@ -52,6 +52,61 @@ def _broadcast_event(event_type: str, data: dict):
                 dead.append(q)
         for q in dead:
             _sse_clients.remove(q)
+
+
+@app.route('/output/cvs/<path:filename>', methods=['GET'])
+def serve_cv_file(filename):
+    cv_dir = BASE_DIR / "output" / "cvs"
+    filepath = cv_dir / filename
+    if not filepath.exists():
+        return jsonify({"error": "File not found"}), 404
+    return send_file(str(filepath), as_attachment=True, download_name=filename, mimetype='application/pdf')
+
+
+@app.route('/cover-letter', methods=['POST'])
+def cover_letter():
+    data = request.json or {}
+    job_description = data.get('job_description', '')
+    company = data.get('company', '')
+    title = data.get('title', '')
+    archetype = data.get('archetype', 'agentic_automation')
+    if not job_description and not title:
+        return jsonify({"error": "Provide job_description or title"}), 400
+    try:
+        orch = get_orchestrator()
+        profile = orch.candidate_profile
+        name = profile.get("personal_details", {}).get("name", "Emmanuel Ndaliro").title()
+        summary = profile.get("narrative", {}).get("professional_summary", "")
+        proof_points = profile.get("proof_points", [])
+        github = profile.get("professional_profiles", {}).get("github", "")
+        linkedin = profile.get("professional_profiles", {}).get("linkedin", "")
+        proof_text = "\n".join(f"- {p['metric']} ({p['context']})" for p in proof_points[:3])
+        jd_snippet = job_description[:800] if job_description else f"{title} at {company}"
+        prompt = f"""Write a concise, powerful cover letter (3-4 paragraphs, under 250 words) for:
+
+CANDIDATE: {name}
+SUMMARY: {summary}
+PROOF POINTS:
+{proof_text}
+ROLE: {title} at {company}
+ARCHETYPE: {archetype}
+JD EXCERPT: {jd_snippet}
+
+Rules:
+- First paragraph: hook with a specific achievement + why THIS company/role
+- Second paragraph: top 2-3 relevant proof points tied to JD requirements
+- Third paragraph: brief forward-looking close with specific ask
+- Tone: direct, technically credible, never hollow phrases like "I am passionate"
+- Sign off as {name} with {github} and {linkedin}
+
+Output ONLY the letter text, no subject line, no meta commentary."""
+        from agent.llm.llm_client import LLMClient
+        client = LLMClient()
+        letter = client.complete(prompt, system="You write concise, technically credible cover letters.", max_tokens=600, temperature=0.4)
+        return jsonify({"letter": letter, "company": company, "title": title, "archetype": archetype})
+    except Exception as e:
+        logging.exception("cover-letter error")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/', methods=['GET'])
