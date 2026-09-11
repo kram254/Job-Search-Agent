@@ -178,10 +178,14 @@ class FollowUpTracker:
         return [r for r in self.records if r.get("status") == "active"]
 
     def stats(self) -> Dict[str, Any]:
-        total = len(self.records)
-        active = sum(1 for r in self.records if r.get("status") == "active")
+        # Phase 5 additive-compat: interview records (record_type == "interview")
+        # live in the same store but are not follow-ups — exclude them so legacy
+        # counts are unchanged for pre-existing data (which has no record_type).
+        followup_records = [r for r in self.records if r.get("record_type") != "interview"]
+        total = len(followup_records)
+        active = sum(1 for r in followup_records if r.get("status") == "active")
         sent_total = sum(
-            1 for r in self.records
+            1 for r in followup_records
             for fu in r.get("followups", [])
             if fu.get("sent")
         )

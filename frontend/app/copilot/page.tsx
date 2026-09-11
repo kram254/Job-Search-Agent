@@ -27,18 +27,29 @@ export default function CopilotPage() {
   const [sending, setSending] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [error, setError] = useState('')
+  // JobRight-parity UI addition: conversationId lets the user start fresh
+  // conversations; history is kept server-side per id, nothing is deleted
+  const [conversationId, setConversationId] = useState('default')
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    api.copilotHistory()
+    setLoadingHistory(true)
+    api.copilotHistory(conversationId)
       .then(r => setMessages(r.messages ?? []))
       .catch(() => {})
       .finally(() => setLoadingHistory(false))
-  }, [])
+  }, [conversationId])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  function newConversation() {
+    setConversationId(`chat_${Date.now()}`)
+    setMessages([])
+    setInput('')
+    setError('')
+  }
 
   function send(text?: string) {
     const message = (text ?? input).trim()
@@ -48,7 +59,7 @@ export default function CopilotPage() {
     setSending(true)
     setMessages(m => [...m, { role: 'user', content: message }])
 
-    api.copilotChat({ message })
+    api.copilotChat({ message, conversation_id: conversationId })
       .then(r => {
         setMessages(m => [...m, { role: 'assistant', content: r.reply, actions: r.actions ?? [] }])
       })
@@ -70,8 +81,16 @@ export default function CopilotPage() {
   return (
     <main className="pl-56 h-screen bg-slate-950 text-slate-200 flex flex-col">
       <div className="px-8 pt-8 pb-4 border-b border-slate-800 bg-slate-950/90">
-        <h1 className="text-2xl font-bold text-white flex items-center gap-2">🤖 AI Copilot</h1>
-        <p className="text-sm text-slate-500">Your 24/7 career copilot — grounded in your live feed, applications and pipeline.</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-white flex items-center gap-2">🤖 AI Copilot</h1>
+            <p className="text-sm text-slate-500">Your 24/7 career copilot — grounded in your live feed, applications and pipeline.</p>
+          </div>
+          <button onClick={newConversation}
+            className="text-xs bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 px-3 py-2 rounded-lg transition-colors">
+            + New conversation
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-8 py-6">

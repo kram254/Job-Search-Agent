@@ -262,6 +262,17 @@ class TestInterviews:
             assert len(tracker.get_interviews()) == 1
             assert len(tracker.all_active()) == 1
 
+    def test_interviews_do_not_inflate_followup_stats(self):
+        from agent.tracker.followup_tracker import FollowUpTracker
+        with tempfile.TemporaryDirectory() as td:
+            tracker = FollowUpTracker(storage_path=os.path.join(td, "f.json"))
+            tracker.track(job_id="j10", company="C", title="T")
+            stats_before = tracker.stats()
+            tracker.add_interview("j9", "Co", "Eng", "2026-12-01T10:00:00")
+            stats_after = tracker.stats()
+            assert stats_after["total_tracked"] == stats_before["total_tracked"]
+            assert stats_after["active"] == stats_before["active"]
+
 
 class TestInsiderLinks:
 
