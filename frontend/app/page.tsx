@@ -10,6 +10,9 @@ type Session = { session_id: string; checkpoints: number; latest?: { step?: stri
 type ProviderInfo = { available: boolean; model?: string }
 type Providers = { anthropic?: ProviderInfo; openrouter?: ProviderInfo; gemini?: ProviderInfo; active_provider?: string }
 type FollowupStats = { due_count?: number; total?: number }
+// JobRight-parity additions (Phases 3 & 5)
+type Alert = { id: string; title?: string; company?: string; score?: number; url?: string; read?: boolean }
+type Interview = { id: string; title?: string; company?: string; scheduled_at?: string; interview_type?: string; status?: string }
 
 function StatCard({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color: string }) {
   return (
@@ -54,6 +57,93 @@ function ScorePill({ score }: { score?: number }) {
   )
 }
 
+// JobRight-parity Phase 4 (additive): CV upload -> merge proposal -> confirm
+type ImportProposal = {
+  change_count?: number
+  changes?: Array<{ key: string; action: string; current?: unknown; proposed?: unknown; added?: string[]; removed?: string[] }>
+}
+
+function ImportCvCard({ onDone }: { onDone: () => void }) {
+  const [file, setFile] = useState<File | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [proposal, setProposal] = useState<ImportProposal | null>(null)
+  const [importMsg, setImportMsg] = useState('')
+
+  function handleUpload() {
+    if (!file || importing) return
+    setImporting(true)
+    setImportMsg('')
+    api.profileImport(file)
+      .then((r: ImportProposal) => {
+        setProposal(r)
+        setImportMsg(r.change_count ? `${r.change_count} proposed changes ready for review` : 'No changes detected — your profile already covers this CV.')
+      })
+      .catch((e: Error) => setImportMsg(`Import failed: ${e.message}`))
+      .finally(() => setImporting(false))
+  }
+
+  function handleConfirm() {
+    if (!proposal || importing) return
+    setImporting(true)
+    api.profileImportConfirm({})
+      .then((r: { applied_count?: number; backup_path?: string }) => {
+        setImportMsg(`Applied ${r.applied_count ?? 0} changes. Backup saved — you can revert if needed.`)
+        setProposal(null)
+        setFile(null)
+        onDone()
+      })
+      .catch((e: Error) => setImportMsg(`Confirm failed: ${e.message}`))
+      .finally(() => setImporting(false))
+  }
+
+  return (
+    <div className="mb-8 bg-slate-900 border border-slate-800 rounded-xl p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="text-sm font-semibold text-white">Import CV</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Upload a CV to update your candidate profile — reviewed field-by-field before anything is applied.</p>
+        </div>
+        <span className="text-xs text-slate-600 uppercase tracking-widest">Profile onboarding</span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          type="file"
+          accept=".md,.markdown,.txt,.pdf,.docx"
+          onChange={e => setFile(e.target.files?.[0] ?? null)}
+          className="text-xs text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-slate-800 file:text-slate-300 file:cursor-pointer hover:file:bg-slate-700"
+        />
+        <button onClick={handleUpload} disabled={!file || importing}
+          className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors">
+          {importing && !proposal ? 'Parsing…' : 'Parse CV'}
+        </button>
+        {proposal && (
+          <button onClick={handleConfirm} disabled={importing}
+            className="bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors">
+            {importing ? 'Applying…' : `Apply ${(proposal.change_count ?? 0)} changes`}
+          </button>
+        )}
+        {importMsg && <span className="text-xs text-slate-400">{importMsg}</span>}
+      </div>
+
+      {proposal && (proposal.changes ?? []).length > 0 && (
+        <div className="mt-4 space-y-2 max-h-56 overflow-y-auto">
+          {(proposal.changes ?? []).map((c, i) => (
+            <div key={i} className="bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-2">
+              <div className="text-xs font-semibold text-blue-400">{c.key}</div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                {c.action === 'merge' && c.added ? `+ add: ${c.added.join(', ') || '—'}${c.removed?.length ? ` · remove: ${c.removed.join(', ')}` : ''}` :
+                  typeof c.proposed === 'string' ? String(c.proposed).slice(0, 140) :
+                  `${c.action} (${typeof c.proposed === 'object' ? Array.isArray(c.proposed) ? `${c.proposed.length} items` : 'object' : String(c.proposed)})`}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Dashboard() {
   const [jobs, setJobs] = useState<{ jobs: Job[]; total: number } | null>(null)
   const [apps, setApps] = useState<{ applications: AppRecord[] } | null>(null)
@@ -65,6 +155,10 @@ export default function Dashboard() {
   const [processing, setProcessing] = useState(false)
   const [discoverResult, setDiscoverResult] = useState<{ top_jobs: Job[] } | null>(null)
   const [actionMsg, setActionMsg] = useState('')
+  // JobRight-parity additions (Phases 3 & 5)
+  const [alerts, setAlerts] = useState<Alert[]>([])
+  const [unreadAlerts, setUnreadAlerts] = useState(0)
+  const [interviews, setInterviews] = useState<Interview[]>([])
 
   const load = useCallback(() => {
     Promise.allSettled([
@@ -73,12 +167,16 @@ export default function Dashboard() {
       api.sessions(),
       api.providers(),
       api.followups(),
-    ]).then(([j, a, s, p, f]) => {
+      api.alerts({ limit: 5 }),            // Phase 3 (additive)
+      api.interviews({ upcoming_only: true }), // Phase 5 (additive)
+    ]).then(([j, a, s, p, f, al, iv]) => {
       if (j.status === 'fulfilled') setJobs(j.value)
       if (a.status === 'fulfilled') setApps(a.value)
       if (s.status === 'fulfilled') setSessions(s.value)
       if (p.status === 'fulfilled') setProviders(p.value)
       if (f.status === 'fulfilled') setFollowupStats(f.value.stats ?? {})
+      if (al.status === 'fulfilled') { setAlerts(al.value.alerts ?? []); setUnreadAlerts(al.value.unread_count ?? 0) }
+      if (iv.status === 'fulfilled') setInterviews(iv.value.interviews ?? [])
       setLoading(false)
     })
   }, [])
@@ -125,6 +223,33 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* JobRight-parity Phase 3 (additive): high-match job alerts */}
+      {unreadAlerts > 0 && (
+        <div className="mb-6 bg-gradient-to-r from-amber-950/40 to-slate-900 border border-amber-900/50 rounded-xl p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-xl">🔔</span>
+            <div>
+              <div className="text-sm font-semibold text-amber-300">{unreadAlerts} new high-match job{unreadAlerts === 1 ? '' : 's'} just landed</div>
+              <div className="text-xs text-slate-500">
+                {alerts.filter(a => !a.read).slice(0, 2).map(a => `${a.title ?? ''} @ ${a.company ?? ''}`).join(' · ')}
+                {alerts.filter(a => !a.read).length > 2 ? ' · …' : ''}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {alerts.filter(a => !a.read).slice(0, 1).map(a => (
+              a.url && <Link key={a.id} href={a.url} target="_blank" rel="noopener noreferrer"
+                className="text-xs bg-amber-600 hover:bg-amber-500 text-white rounded-lg px-3 py-1.5 transition-colors">View job →</Link>
+            ))}
+            <button
+              onClick={() => api.markAllAlertsRead().then(() => load())}
+              className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
+              Dismiss all
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <StatCard
@@ -191,6 +316,9 @@ export default function Dashboard() {
           {actionMsg}
         </div>
       )}
+
+      {/* JobRight-parity Phase 4 (additive): Import CV / profile onboarding */}
+      <ImportCvCard onDone={load} />
 
       {discoverResult && discoverResult.top_jobs.length > 0 && (
         <div className="mb-8">
@@ -262,6 +390,35 @@ export default function Dashboard() {
         </div>
 
         <div className="space-y-5">
+          {/* JobRight-parity Phase 5 (additive): upcoming interviews */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-white">Upcoming Interviews</h2>
+              <Link href="/follow-ups" className="text-xs text-blue-400 hover:text-blue-300">Manage →</Link>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+              {interviews.length === 0 ? (
+                <div className="py-8 text-center text-slate-600 text-xs">No interviews scheduled</div>
+              ) : (
+                <div className="divide-y divide-slate-800/50">
+                  {interviews.slice(0, 4).map(iv => (
+                    <div key={iv.id} className="flex items-center justify-between px-4 py-3">
+                      <div className="min-w-0 mr-2">
+                        <div className="text-xs text-white font-medium truncate">{iv.title ?? '—'}</div>
+                        <div className="text-xs text-slate-600">
+                          {iv.company ?? '—'} · {iv.scheduled_at ? new Date(iv.scheduled_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                        </div>
+                      </div>
+                      <span className="text-xs px-1.5 py-0.5 rounded-full shrink-0 bg-purple-900/60 text-purple-300">
+                        {iv.interview_type ?? 'interview'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
           <div>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold text-white">Applications</h2>

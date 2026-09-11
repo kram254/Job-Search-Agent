@@ -10,6 +10,13 @@ const groups = [
       { href: '/', label: 'Dashboard' },
       { href: '/jobs', label: 'Browse Jobs' },
       { href: '/discover', label: 'Discover' },
+      { href: '/insights', label: 'Insights' },
+    ],
+  },
+  {
+    label: 'Copilot',
+    links: [
+      { href: '/copilot', label: '🤖 AI Copilot', highlight: true },
     ],
   },
   {

@@ -128,3 +128,65 @@ class ContactLookup:
             })
         results.sort(key=lambda x: x["priority"])
         return results
+
+    # ---------------------------------------------------------------------- #
+    # JobRight-parity Phase 5 — alumni signal & insider search links
+    # (ADDITIVE methods only — existing lookup/lookup_all untouched)
+    # ---------------------------------------------------------------------- #
+
+    @staticmethod
+    def build_insider_search_links(company: str,
+                                   candidate_education: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """Generate ready-to-click insider search URLs for a target company.
+
+        JobRight's 'insider connections' parity: alumni + hiring-manager searches
+        keyed off the candidate's own education (from candidate_profile.education)
+        and the target company.
+        """
+        slug = re.sub(r"\s+", "-", (company or "").strip().lower())
+        slug = re.sub(r"[^a-z0-9\-]", "", slug)
+        linkedin_base = f"https://www.linkedin.com/search/results/people/?keywords={slug}"
+
+        alumni_links: List[Dict[str, str]] = []
+        for ed in (candidate_education or []):
+            school = str((ed or {}).get("institution", "") or "").strip()
+            if not school:
+                continue
+            school_q = requests.utils.quote(f"{school}")
+            alumni_links.append({
+                "school": school,
+                "url": (
+                    "https://www.linkedin.com/search/results/people/"
+                    f"?keywords={requests.utils.quote(company)}%20{school_q}"
+                    f"&schoolFilter={requests.utils.quote(school)}"
+                ),
+            })
+
+        return {
+            "company": company,
+            "hiring_managers": (
+                f"{linkedin_base}%20(recruiter%20OR%20%22hiring%20manager%22)"
+            ),
+            "engineers_at_company": (
+                f"{linkedin_base}%20(engineer%20OR%20developer%20OR%20%22engineering%22)"
+            ),
+            "alumni": alumni_links,
+        }
+
+    def find_insiders(self, company_or_domain: str,
+                      candidate_education: Optional[List[Dict[str, Any]]] = None,
+                      limit: int = 5) -> Dict[str, Any]:
+        """Combined insider discovery: verified contacts (Hunter, if configured)
+        plus alumni/hiring-manager search links. Never raises — outreach flows
+        degrade gracefully."""
+        result: Dict[str, Any] = {
+            "company": company_or_domain,
+            "contacts": [],
+            "search_links": self.build_insider_search_links(company_or_domain, candidate_education),
+            "hunter_configured": bool(self.api_key),
+        }
+        try:
+            result["contacts"] = self.lookup_all(company_or_domain, limit=limit)
+        except Exception as e:
+            logger.warning(f"[ContactLookup] find_insiders lookup failed: {e}")
+        return result

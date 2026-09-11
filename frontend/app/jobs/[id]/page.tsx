@@ -11,8 +11,24 @@ type ResearchResult = Record<string, unknown>
 type OutreachResult = { subject?: string; body?: string; contact?: Record<string, unknown>; matched_skills?: string[] }
 type CvResult = { pdf_path?: string; page_count?: number; file_size_kb?: number; keywords_injected?: string[]; coverage_percentage?: number; format_used?: string }
 type ApplyResult = Record<string, unknown>
+// JobRight-parity additions (Phases 1 & 5)
+type MatchExplanation = {
+  base_score?: number
+  summary?: string
+  skills?: { matched?: string[]; missing?: string[]; match_ratio?: number; jd_skill_count?: number }
+  experience?: { jd_years?: number | null; candidate_years?: number | null; status?: string; note?: string }
+  seniority?: { jd_level?: string; note?: string }
+  areas_to_review?: string[]
+  highlights?: string[]
+}
+type Insiders = {
+  company?: string
+  contacts?: Array<{ name?: string; title?: string; email?: string; linkedin?: string; confidence?: number }>
+  search_links?: { hiring_managers?: string; engineers_at_company?: string; alumni?: Array<{ school?: string; url?: string }> }
+  hunter_configured?: boolean
+}
 
-const TABS = ['Overview', 'Apply', 'Outreach', 'Cover Letter', 'Research'] as const
+const TABS = ['Overview', 'Match', 'Apply', 'Outreach', 'Cover Letter', 'Research', 'Insiders'] as const
 type Tab = typeof TABS[number]
 
 const CV_VARIANTS = [
@@ -80,6 +96,12 @@ export default function JobDetail() {
   const [applying, setApplying] = useState(false)
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null)
 
+  // JobRight-parity additions (Phases 1 & 5)
+  const [matchExpl, setMatchExpl] = useState<MatchExplanation | null>(null)
+  const [matchLoading, setMatchLoading] = useState(false)
+  const [insiders, setInsiders] = useState<Insiders | null>(null)
+  const [insidersLoading, setInsidersLoading] = useState(false)
+
   useEffect(() => {
     api.job(id)
       .then(setJob)
@@ -109,6 +131,25 @@ export default function JobDetail() {
       .then(r => { setEvaluation(r); setTab('Overview') })
       .catch((e: Error) => setError(e.message))
       .finally(() => setEvaluating(false))
+  }
+
+  // JobRight-parity Phase 1 (additive): load the match explanation on demand
+  function handleMatchExplanation() {
+    setMatchLoading(true)
+    api.matchExplanation(id)
+      .then(setMatchExpl)
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setMatchLoading(false))
+  }
+
+  // JobRight-parity Phase 5 (additive): insider discovery for this company
+  function handleInsiders() {
+    if (!job) return
+    setInsidersLoading(true)
+    api.insiders({ company: String(job.company ?? '') })
+      .then(setInsiders)
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setInsidersLoading(false))
   }
 
   function handleResearch() {
@@ -368,6 +409,169 @@ export default function JobDetail() {
                 {evaluating ? 'Evaluating…' : '⚡ Evaluate Fit Now'}
               </button>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* JobRight-parity Phase 1 (additive): Match explanation tab */}
+      {tab === 'Match' && (
+        <div className="space-y-5">
+          {!matchExpl && !matchLoading && (
+            <div className="bg-slate-900/50 border border-dashed border-slate-700 rounded-xl p-6 text-center">
+              <div className="text-slate-500 text-sm mb-3">
+                Get a JobRight-style breakdown: which of your skills align, how your experience compares, and what to review before applying.
+              </div>
+              <button onClick={handleMatchExplanation} disabled={matchLoading}
+                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-colors">
+                Explain This Match
+              </button>
+            </div>
+          )}
+          {matchLoading && <div className="text-slate-500 text-sm py-8 text-center">Crunching your profile against this job…</div>}
+          {matchExpl && (
+            <>
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Summary</div>
+                  {typeof matchExpl.base_score === 'number' && <ScoreBadge score={matchExpl.base_score} size="lg" />}
+                </div>
+                <p className="text-sm text-slate-300">{matchExpl.summary}</p>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-5">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
+                    Skill Alignment {matchExpl.skills?.jd_skill_count ? `(${matchExpl.skills.jd_skill_count} required skills detected)` : ''}
+                  </div>
+                  <div className="mb-3">
+                    <div className="text-xs text-green-500 mb-1.5">✓ Matched ({matchExpl.skills?.matched?.length ?? 0})</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(matchExpl.skills?.matched ?? []).map(s => (
+                        <span key={s} className="text-xs bg-green-950/40 border border-green-900/60 text-green-400 px-2 py-0.5 rounded">{s}</span>
+                      ))}
+                      {(matchExpl.skills?.matched ?? []).length === 0 && <span className="text-xs text-slate-600">None detected</span>}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-amber-500 mb-1.5">⚠ Missing ({matchExpl.skills?.missing?.length ?? 0})</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(matchExpl.skills?.missing ?? []).slice(0, 12).map(s => (
+                        <span key={s} className="text-xs bg-amber-950/30 border border-amber-900/50 text-amber-400 px-2 py-0.5 rounded">{s}</span>
+                      ))}
+                      {(matchExpl.skills?.missing ?? []).length === 0 && <span className="text-xs text-slate-600">Nothing missing</span>}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-5">
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                    <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Experience</div>
+                    <div className="text-sm text-slate-300">{matchExpl.experience?.note}</div>
+                    {matchExpl.experience?.jd_years != null && (
+                      <div className="text-xs text-slate-500 mt-2">
+                        Requirement: ~{matchExpl.experience.jd_years} yr · Profile: ~{matchExpl.experience.candidate_years ?? '?'} yr
+                      </div>
+                    )}
+                  </div>
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                    <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Seniority</div>
+                    <div className="text-sm text-slate-300">{matchExpl.seniority?.note}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Highlights</div>
+                <ul className="space-y-1.5">
+                  {(matchExpl.highlights ?? []).map((h, i) => (
+                    <li key={i} className="text-sm text-slate-300 flex gap-2"><span className="text-green-400">✦</span>{h}</li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-5">
+                <div className="text-xs font-semibold text-amber-500 uppercase tracking-wider mb-3">Areas to review before applying</div>
+                <ul className="space-y-1.5">
+                  {(matchExpl.areas_to_review ?? []).map((a, i) => (
+                    <li key={i} className="text-sm text-amber-200/90 flex gap-2"><span>⚠</span>{a}</li>
+                  ))}
+                </ul>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* JobRight-parity Phase 5 (additive): Insiders tab */}
+      {tab === 'Insiders' && (
+        <div className="space-y-5">
+          {!insiders && !insidersLoading && (
+            <div className="bg-slate-900/50 border border-dashed border-slate-700 rounded-xl p-6 text-center">
+              <div className="text-slate-500 text-sm mb-3">
+                Find alumni and hiring-manager connections at <span className="text-slate-300">{String(job?.company ?? 'this company')}</span> — insider referrals can quadruple your interview odds.
+              </div>
+              <button onClick={handleInsiders} disabled={insidersLoading}
+                className="bg-purple-700 hover:bg-purple-600 disabled:opacity-50 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-colors">
+                Find Insiders
+              </button>
+            </div>
+          )}
+          {insidersLoading && <div className="text-slate-500 text-sm py-8 text-center">Looking up insider connections…</div>}
+          {insiders && (
+            <>
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Direct contacts {insiders.hunter_configured ? '' : '(add HUNTER_API_KEY for verified emails)'}</div>
+                {(insiders.contacts ?? []).length === 0 ? (
+                  <div className="text-sm text-slate-600">No verified contacts found — use the search links below.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {(insiders.contacts ?? []).map((c, i) => (
+                      <div key={i} className="flex items-center justify-between bg-slate-950/60 rounded-lg px-3 py-2">
+                        <div>
+                          <div className="text-sm text-white">{c.name || 'Unknown'}</div>
+                          <div className="text-xs text-slate-500">{c.title || '—'}</div>
+                        </div>
+                        <div className="flex gap-2">
+                          {c.linkedin && <a href={c.linkedin} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:text-blue-300">LinkedIn ↗</a>}
+                          {c.email && <a href={`mailto:${c.email}`} className="text-xs text-green-400 hover:text-green-300">{c.email}</a>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Search links</div>
+                <div className="space-y-2">
+                  {insiders.search_links?.hiring_managers && (
+                    <a href={insiders.search_links.hiring_managers} target="_blank" rel="noopener noreferrer"
+                      className="block text-sm bg-slate-950/60 hover:bg-slate-800/60 rounded-lg px-3 py-2 text-blue-400 transition-colors">
+                      🔎 Recruiters &amp; hiring managers at {String(job?.company ?? 'company')} ↗
+                    </a>
+                  )}
+                  {insiders.search_links?.engineers_at_company && (
+                    <a href={insiders.search_links.engineers_at_company} target="_blank" rel="noopener noreferrer"
+                      className="block text-sm bg-slate-950/60 hover:bg-slate-800/60 rounded-lg px-3 py-2 text-blue-400 transition-colors">
+                      🔎 Engineers at {String(job?.company ?? 'company')} ↗
+                    </a>
+                  )}
+                  {(insiders.search_links?.alumni ?? []).map(a => (
+                    <a key={a.school} href={a.url} target="_blank" rel="noopener noreferrer"
+                      className="block text-sm bg-slate-950/60 hover:bg-slate-800/60 rounded-lg px-3 py-2 text-blue-400 transition-colors">
+                      🎓 {a.school} alumni ↗
+                    </a>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-slate-900/50 border border-dashed border-slate-700 rounded-xl p-4 text-center">
+                <button onClick={handleOutreach} disabled={reaching}
+                  className="text-xs bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 px-4 py-2 rounded-lg transition-colors">
+                  Draft an intro email on the Outreach tab →
+                </button>
+              </div>
+            </>
           )}
         </div>
       )}

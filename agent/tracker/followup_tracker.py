@@ -191,3 +191,61 @@ class FollowUpTracker:
             "closed": total - active,
             "followups_sent": sent_total
         }
+
+    # ---------------------------------------------------------------------- #
+    # JobRight-parity Phase 5 — interview scheduling (ADDITIVE methods only)
+    # Interview entries are stored alongside follow-up records using a
+    # dedicated record type so existing data and code paths are untouched.
+    # ---------------------------------------------------------------------- #
+
+    def add_interview(self, job_id: str, company: str, title: str,
+                      scheduled_at: str, interview_type: str = "screening",
+                      contact_name: str = "", notes: str = "",
+                      candidate_name: str = "") -> Dict[str, Any]:
+        """Add an interview entry. scheduled_at is ISO format."""
+        record = {
+            "id": f"iv_{job_id}_{int(datetime.utcnow().timestamp())}",
+            "record_type": "interview",
+            "job_id": job_id,
+            "company": company,
+            "title": title,
+            "contact_name": contact_name,
+            "candidate_name": candidate_name,
+            "interview_type": interview_type,
+            "scheduled_at": scheduled_at,
+            "notes": notes,
+            "status": "scheduled",
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        self.records.append(record)
+        self._save()
+        return record
+
+    def get_interviews(self, upcoming_only: bool = False) -> List[Dict[str, Any]]:
+        """All interview records, optionally filtered to upcoming ones."""
+        interviews = [r for r in self.records if r.get("record_type") == "interview"]
+        if upcoming_only:
+            now = datetime.utcnow()
+            upcoming = []
+            for iv in interviews:
+                try:
+                    when = datetime.fromisoformat(str(iv.get("scheduled_at", "")))
+                    if when.replace(tzinfo=None) >= now:
+                        upcoming.append(iv)
+                except (ValueError, TypeError):
+                    upcoming.append(iv)  # keep unparseable dates visible rather than hide them
+            return sorted(upcoming, key=lambda r: r.get("scheduled_at", ""))
+        return interviews
+
+    def update_interview_status(self, interview_id: str, status: str) -> bool:
+        """Move an interview through: scheduled -> completed / cancelled."""
+        valid = ("scheduled", "completed", "cancelled")
+        if status not in valid:
+            return False
+        for record in self.records:
+            if record.get("id") == interview_id and record.get("record_type") == "interview":
+                record["status"] = status
+                record["updated_at"] = datetime.utcnow().isoformat()
+                self._save()
+                return True
+        return False

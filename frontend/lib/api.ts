@@ -91,6 +91,44 @@ const api = {
   composioConnections: () => req('/composio/connections'),
   composioSend: (d: object) =>
     req('/composio/send', { method: 'POST', body: JSON.stringify(d) }),
+
+  // ---- JobRight-parity additions (Phases 1-5) ----
+  matchExplanation: (id: string) => req(`/jobs/${id}/match-explanation`),
+  insights: () => req('/insights'),
+  copilotChat: (d: object) =>
+    req('/copilot/chat', { method: 'POST', body: JSON.stringify(d) }),
+  copilotHistory: (conversationId?: string) =>
+    req(`/copilot/history?conversation_id=${conversationId ?? 'default'}`),
+  alerts: (p?: { unread_only?: boolean; limit?: number }) => {
+    const q = new URLSearchParams()
+    if (p?.unread_only) q.set('unread_only', 'true')
+    if (p?.limit) q.set('limit', String(p.limit))
+    return req(`/alerts?${q}`)
+  },
+  markAlertRead: (id: string) => req(`/alerts/${id}/read`, { method: 'POST' }),
+  markAllAlertsRead: () => req('/alerts/read-all', { method: 'POST' }),
+  profileImport: (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return fetch(`${BASE}/profile/import`, { method: 'POST', body: fd }).then(async res => {
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error((body as { error?: string }).error || res.statusText)
+      return body
+    })
+  },
+  profileImportConfirm: (d: object) =>
+    req('/profile/import/confirm', { method: 'POST', body: JSON.stringify(d) }),
+  interviews: (p?: { upcoming_only?: boolean }) =>
+    req(`/interviews${p?.upcoming_only ? '?upcoming_only=true' : ''}`),
+  addInterview: (d: object) => req('/interviews', { method: 'POST', body: JSON.stringify(d) }),
+  updateInterviewStatus: (id: string, status: string) =>
+    req(`/interviews/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) }),
+  insiders: (p: { company?: string; domain?: string }) => {
+    const q = new URLSearchParams()
+    if (p.company) q.set('company', p.company)
+    if (p.domain) q.set('domain', p.domain)
+    return req(`/insiders?${q}`)
+  },
 }
 
 export default api

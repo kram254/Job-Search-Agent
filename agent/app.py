@@ -27,6 +27,17 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 _sse_clients: list = []
 _sse_lock = threading.Lock()
 
+# JobRight-parity Phase 4 (additive): in-memory cache of the last parsed CV,
+# bridging /profile/import -> /profile/import/confirm without persisting
+# candidate data anywhere new.
+_parsed_cache: dict = {'latest': None}
+
+
+def datetime_infix() -> str:
+    """Timestamp fragment for temp upload filenames."""
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+
 orchestrator = None
 
 
@@ -394,6 +405,25 @@ def scan():
         result = asyncio.run(scanner.run_full_scan())
         scanner.export_to_jobs_raw(result, str(JOBS_RAW))
         browser.close()
+
+        # JobRight-parity Phase 3 hook (additive): generate alerts for new
+        # high-match listings. Isolated in try/except so the scan's own
+        # behavior and response are completely unchanged if it fails.
+        try:
+            from agent.alerts.alert_engine import evaluate_listings_for_alerts
+            scan_listings = [
+                {"title": l.title, "company": l.company, "url": l.url,
+                 "location": l.location, "score": l.score}
+                for l in result.listings
+            ]
+            fresh_alerts = evaluate_listings_for_alerts(
+                scan_listings,
+                alerts_path=str(DATA_DIR / "alerts.json"),
+            )
+            if fresh_alerts:
+                _broadcast_event("alerts_new", {"count": len(fresh_alerts)})
+        except Exception as _alert_err:
+            logging.warning(f"alert generation skipped: {_alert_err}")
 
         _broadcast_event("scan_complete", {
             "total_found": result.total_found,
@@ -1119,6 +1149,271 @@ def list_applications():
         orch = get_orchestrator()
         return jsonify({"applications": orch.ledger.all(), "stats": orch.ledger.stats()})
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ===========================================================================
+# JobRight-parity additions (Phases 1-5) — NEW ROUTES ONLY.
+# Everything above is untouched; the routes below are purely additive and
+# only read existing data sources / reuse existing services.
+# ===========================================================================
+
+# ---------- Phase 1: match explanation + insights ----------
+
+@app.route('/jobs/<job_id>/match-explanation', methods=['GET'])
+def job_match_explanation(job_id):
+    """JobRight-style 'why this score' breakdown for one job."""
+    try:
+        from agent.ranking.match_explainer import explain_match
+        orch = get_orchestrator()
+        job = next((j for j in orch.jobs_raw if j.get("id") == job_id), None)
+        if not job:
+            return jsonify({"error": f"Job {job_id} not found"}), 404
+        explanation = explain_match(orch.candidate_profile, job)
+        return jsonify(explanation)
+    except Exception as e:
+        logging.exception("match-explanation error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/insights', methods=['GET'])
+def insights():
+    """Profile-vs-market alignment view (skills demand, seniority mix, funnel)."""
+    try:
+        from agent.analytics.insights_builder import build_insights
+        orch = get_orchestrator()
+        return jsonify(build_insights(
+            orch.candidate_profile,
+            orch.jobs_raw,
+            applications=orch.ledger.all(),
+        ))
+    except Exception as e:
+        logging.exception("insights error")
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------- Phase 2: AI career copilot ----------
+
+@app.route('/copilot/chat', methods=['POST'])
+def copilot_chat():
+    data = request.json or {}
+    message = (data.get('message') or '').strip()
+    if not message:
+        return jsonify({"error": "Provide message"}), 400
+    conversation_id = data.get('conversation_id', 'default')
+    try:
+        from agent.copilot.career_copilot import get_copilot
+        orch = get_orchestrator()
+
+        followups_due = 0
+        try:
+            from agent.tracker.followup_tracker import FollowUpTracker
+            ft = FollowUpTracker(storage_path=str(DATA_DIR / "followups.json"))
+            followups_due = len(ft.get_due())
+        except Exception:
+            pass
+
+        pipeline_stats = {}
+        try:
+            from agent.pipeline.pipeline_manager import PipelineManager
+            pm = PipelineManager(pipeline_path=str(DATA_DIR / "pipeline.json"))
+            pipeline_stats = pm.stats()
+        except Exception:
+            pass
+
+        copilot = get_copilot(orch.llm_client, history_dir=str(DATA_DIR / "copilot_history"))
+        result = copilot.chat(
+            message=message,
+            conversation_id=conversation_id,
+            candidate_profile=orch.candidate_profile,
+            jobs=orch.jobs_raw,
+            applications=orch.ledger.all(),
+            pipeline_stats=pipeline_stats,
+            followups_due=followups_due,
+        )
+        return jsonify(result)
+    except Exception as e:
+        logging.exception("copilot chat error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/copilot/history', methods=['GET'])
+def copilot_history():
+    conversation_id = request.args.get('conversation_id', 'default')
+    try:
+        from agent.copilot.career_copilot import get_copilot
+        orch = get_orchestrator()
+        copilot = get_copilot(orch.llm_client, history_dir=str(DATA_DIR / "copilot_history"))
+        return jsonify({
+            "conversation_id": conversation_id,
+            "messages": copilot.load_history(conversation_id),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------- Phase 3: alerts ----------
+
+@app.route('/alerts', methods=['GET'])
+def list_alerts():
+    unread_only = request.args.get('unread_only', 'false').lower() == 'true'
+    limit = int(request.args.get('limit', 50))
+    try:
+        from agent.alerts.alert_engine import AlertEngine
+        engine = AlertEngine(alerts_path=str(DATA_DIR / "alerts.json"))
+        return jsonify({
+            "alerts": engine.list_alerts(unread_only=unread_only, limit=limit),
+            "unread_count": engine.unread_count(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/alerts/<alert_id>/read', methods=['POST'])
+def mark_alert_read(alert_id):
+    try:
+        from agent.alerts.alert_engine import AlertEngine
+        engine = AlertEngine(alerts_path=str(DATA_DIR / "alerts.json"))
+        return jsonify({"marked": engine.mark_read(alert_id)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/alerts/read-all', methods=['POST'])
+def mark_all_alerts_read():
+    try:
+        from agent.alerts.alert_engine import AlertEngine
+        engine = AlertEngine(alerts_path=str(DATA_DIR / "alerts.json"))
+        return jsonify({"marked": engine.mark_all_read()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------- Phase 4: resume import ----------
+
+@app.route('/profile/import', methods=['POST'])
+def profile_import():
+    """Upload a CV file; returns a merge proposal without touching the profile."""
+    try:
+        from agent.services.resume_parser import parse_resume_file, ResumeParseError
+        f = request.files.get('file')
+        if not f:
+            return jsonify({"error": "Provide a 'file' upload (md, txt, pdf, docx)"}), 400
+        filename = f.filename or "uploaded_cv"
+        temp_path = DATA_DIR / f"upload_{datetime_infix()}_{Path(filename).name}"
+        f.save(str(temp_path))
+        try:
+            orch = get_orchestrator()
+            proposal = parse_resume_file(
+                llm_client=orch.llm_client,
+                file_path=str(temp_path),
+                filename=filename,
+                profile_path=str(CANDIDATE_PROFILE),
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
+        # the parsed payload travels separately from the persisted proposal
+        response = {k: v for k, v in proposal.items() if k != "parsed"}
+        _parsed_cache['latest'] = proposal.get("parsed", {})
+        return jsonify(response)
+    except ResumeParseError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logging.exception("profile import error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/profile/import/confirm', methods=['POST'])
+def profile_import_confirm():
+    """Apply selected (or all) proposed changes from the last parse."""
+    data = request.json or {}
+    change_keys = data.get('change_keys')  # None => apply all proposed
+    try:
+        from agent.services.resume_parser import ResumeParser, ResumeParseError
+        parsed = _parsed_cache.get('latest')
+        if not parsed:
+            return jsonify({"error": "No pending import — upload a CV via /profile/import first"}), 404
+        orch = get_orchestrator()
+        parser = ResumeParser(llm_client=orch.llm_client, profile_path=str(CANDIDATE_PROFILE))
+        result = parser.apply_merge(parsed, change_keys=change_keys)
+        _parsed_cache['latest'] = None
+        return jsonify(result)
+    except ResumeParseError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logging.exception("profile import confirm error")
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------- Phase 5: interviews + insider discovery ----------
+
+@app.route('/interviews', methods=['GET'])
+def list_interviews():
+    upcoming_only = request.args.get('upcoming_only', 'false').lower() == 'true'
+    try:
+        from agent.tracker.followup_tracker import FollowUpTracker
+        ft = FollowUpTracker(storage_path=str(DATA_DIR / "followups.json"))
+        return jsonify({"interviews": ft.get_interviews(upcoming_only=upcoming_only)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/interviews', methods=['POST'])
+def add_interview():
+    data = request.json or {}
+    if not data.get('job_id') or not data.get('scheduled_at'):
+        return jsonify({"error": "Provide job_id and scheduled_at (ISO)"}), 400
+    try:
+        from agent.tracker.followup_tracker import FollowUpTracker
+        orch = get_orchestrator()
+        ft = FollowUpTracker(storage_path=str(DATA_DIR / "followups.json"))
+        record = ft.add_interview(
+            job_id=data.get('job_id'),
+            company=data.get('company', ''),
+            title=data.get('title', ''),
+            scheduled_at=data.get('scheduled_at'),
+            interview_type=data.get('interview_type', 'screening'),
+            contact_name=data.get('contact_name', ''),
+            notes=data.get('notes', ''),
+            candidate_name=orch.candidate_profile.get("personal_details", {}).get("name", ""),
+        )
+        _broadcast_event("interview_scheduled", {"company": record.get("company"), "when": record.get("scheduled_at")})
+        return jsonify(record)
+    except Exception as e:
+        logging.exception("add interview error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/interviews/<interview_id>/status', methods=['POST'])
+def update_interview_status(interview_id):
+    data = request.json or {}
+    status = data.get('status', '')
+    if status not in ('scheduled', 'completed', 'cancelled'):
+        return jsonify({"error": "status must be scheduled|completed|cancelled"}), 400
+    try:
+        from agent.tracker.followup_tracker import FollowUpTracker
+        ft = FollowUpTracker(storage_path=str(DATA_DIR / "followups.json"))
+        return jsonify({"updated": ft.update_interview_status(interview_id, status)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/insiders', methods=['GET'])
+def insiders():
+    """Insider discovery for a company (contacts + alumni/hiring-manager links)."""
+    company = request.args.get('company', '')
+    domain = request.args.get('domain', '')
+    if not company and not domain:
+        return jsonify({"error": "Provide company or domain"}), 400
+    try:
+        from agent.outreach.contact_lookup import ContactLookup
+        orch = get_orchestrator()
+        lookup = ContactLookup()
+        education = orch.candidate_profile.get("education", []) or []
+        result = lookup.find_insiders(domain or company, candidate_education=education)
+        return jsonify(result)
+    except Exception as e:
+        logging.exception("insiders error")
         return jsonify({"error": str(e)}), 500
 
 
