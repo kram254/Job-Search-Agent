@@ -77,7 +77,11 @@ jobs:
     steps:
       - name: Health check
         env:
-          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://job-search-backend.onrender.com' }}
+          # Fix: default pointed at 'job-search-backend.onrender.com', which is
+          # NOT this repo's service (a different/foreign app lives there — its
+          # /health 404s). The actual deployed backend is the -tfd1 instance.
+          # A repo-level BACKEND_URL variable, if set, still takes precedence.
+          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://job-search-agent-tfd1.onrender.com' }}
         run: |
           echo "Waiting 30s for the new instance to warm up..."
           sleep 30
