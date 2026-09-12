@@ -1,0 +1,68 @@
+name: CI
+
+# Restores the "Build & dependency install" check that deploy.yml's
+# "Wait for CI" step waits on (the workflow was previously removed, which is
+# why every Deploy run failed at that step since July). Additive restore —
+# no existing workflow files are modified.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-build:
+    name: Build & dependency install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Install Playwright browser
+        run: playwright install chromium --with-deps || playwright install chromium
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+      - name: Import smoke test (gunicorn target)
+        run: |
+          PYTHONPATH=. python -c "from agent.app import app; print('routes:', len(list(app.url_map.iter_rules())))"
+          gunicorn --check-config agent.app:app 2>/dev/null || PYTHONPATH=. gunicorn --check-config agent.app:app
+
+  frontend-build:
+    name: Frontend build (Next.js)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install frontend dependencies & build
+        working-directory: frontend
+        run: |
+          npm install
+          npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      - name: Lint check (advisory)
+        working-directory: frontend
+        run: npm run lint || echo "::warning::Next lint reported issues (advisory)"
