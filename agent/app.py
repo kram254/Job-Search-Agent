@@ -38,6 +38,12 @@ def datetime_infix() -> str:
     import datetime as _dt
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
+
+def datetime_now_iso() -> str:
+    """ISO timestamp for persisted records (discover-persistence fix)."""
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).isoformat()
+
 orchestrator = None
 
 
@@ -1082,6 +1088,51 @@ def discover():
         )
         result = digest.run()
 
+        # Additive (dashboard-persistence fix): persist every scraped job into
+        # jobs_raw.json — the file /jobs and the dashboard read from. Previously
+        # discover results only went to output/digest_*.json + notifications,
+        # so scraped jobs never appeared in the UI. Mirrors what /scan does via
+        # export_to_jobs_raw. Wrapped in try/except: discovery's own response
+        # and notifications are unaffected if persistence fails.
+        persisted = {"added": 0, "total_in_feed": 0}
+        try:
+            all_jobs = result.get("all_jobs") or []
+            with open(JOBS_RAW) as _f:
+                existing_jobs = json.load(_f)
+            existing_urls = {str(j.get("url") or j.get("link") or "") for j in existing_jobs}
+            existing_urls.discard("")
+            next_id = max([int(j.get("id")) for j in existing_jobs if str(j.get("id", "")).isdigit()] or [0]) + 1
+            added = 0
+            for job in all_jobs:
+                url = str(job.get("url") or "")
+                if not url or url in existing_urls:
+                    continue
+                entry = {
+                    "id": str(next_id),
+                    "title": job.get("title", ""),
+                    "company": job.get("company", ""),
+                    "url": url,
+                    "location": job.get("location", ""),
+                    "description": job.get("description", ""),
+                    "score": job.get("score", 0),
+                    "match_ratio": job.get("match_ratio", 0),
+                    "matched_skills": job.get("matched_skills", []),
+                    "source": job.get("source", "remoteok"),
+                    "salary_range": job.get("salary_range", ""),
+                    "discovered_at": datetime_now_iso(),
+                }
+                existing_jobs.append(entry)
+                existing_urls.add(url)
+                next_id += 1
+                added += 1
+            if added:
+                with open(JOBS_RAW, "w") as _f:
+                    json.dump(existing_jobs, _f, indent=2)
+            persisted = {"added": added, "total_in_feed": len(existing_jobs)}
+            logging.info(f"discover persistence: +{added} jobs (feed now {len(existing_jobs)})")
+        except Exception as _persist_err:
+            logging.warning(f"discover persistence skipped: {_persist_err}")
+
         _broadcast_event("discovery_complete", {
             "total": result["remoteok_count"] + result["linkedin_count"],
             "top_n": len(result["top_jobs"]),
@@ -1093,6 +1144,9 @@ def discover():
             "top_jobs": result["top_jobs"],
             "saved_to": result["saved_to"],
             "notifications": result["notifications"],
+            # additive response keys:
+            "persisted": persisted,
+            "total_in_feed": persisted["total_in_feed"],
         })
     except Exception as e:
         logging.exception("discover error")

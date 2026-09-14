@@ -5,7 +5,10 @@ services:
     buildCommand: |
       pip install -r requirements.txt
       playwright install chromium
-    startCommand: gunicorn agent.app:app
+    # Fix: default sync worker timeout (30s) kills the worker mid-request when
+    # an LLM call chains Anthropic(401)->OpenRouter fallback (observed WORKER
+    # TIMEOUT + SIGKILL on /profile/import). 180s covers the fallback chain.
+    startCommand: gunicorn agent.app:app --timeout 180 --graceful-timeout 30
     envVars:
       - key: PORT
         value: 10000

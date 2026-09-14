@@ -85,6 +85,11 @@ class DailyDigest:
         saved_path = _save_digest(top_jobs, self._output)
         logger.info(f"DailyDigest: top {len(top_jobs)} saved to {saved_path}")
 
+        # Additive (dashboard-persistence fix): expose the FULL deduplicated
+        # scrape — not just the top N — so the /discover route can persist
+        # everything into jobs_raw.json. Existing keys/behavior untouched.
+        all_jobs = _merge_and_rank(remoteok_jobs, linkedin_jobs, top_n=len(remoteok_jobs) + len(linkedin_jobs))
+
         date_str = datetime.utcnow().strftime("%a %d %b %Y")
         intro = f"Top {len(top_jobs)} AI/ML Job Leads — {date_str}"
 
@@ -104,6 +109,7 @@ class DailyDigest:
             "remoteok_count": len(remoteok_jobs),
             "linkedin_count": len(linkedin_jobs),
             "top_jobs":       top_jobs,
+            "all_jobs":       all_jobs,  # additive: full scrape for persistence
             "saved_to":       saved_path,
             "notifications": {
                 "telegram":         telegram_ok,
