@@ -201,10 +201,14 @@ export default function Dashboard() {
       .finally(() => setProcessing(false))
   }
 
-  const topJobs = (jobs?.jobs ?? [])
+  // Top Jobs: prefer scored jobs; fall back to unscored ones (e.g. seed data
+  // has no score field) so the panel isn't empty while the feed has jobs.
+  const allJobs = jobs?.jobs ?? []
+  const scoredJobs = allJobs
     .filter(j => j.score != null)
     .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
     .slice(0, 8)
+  const topJobs = scoredJobs.length > 0 ? scoredJobs : allJobs.slice(0, 8)
 
   const recentApps = (apps?.applications ?? []).slice(0, 6)
   const activeSessions = (sessions?.sessions ?? []).filter(s => s.latest?.status !== 'submitted')
@@ -358,6 +362,7 @@ export default function Dashboard() {
             ) : topJobs.length === 0 ? (
               <div className="py-12 text-center">
                 <div className="text-slate-500 text-sm">No jobs yet</div>
+                <div className="text-slate-600 text-xs mt-1">{(jobs?.total ?? 0) > 0 ? `${jobs?.total} jobs exist but none loaded — hit Refresh` : 'Your feed is empty'}</div>
                 <button onClick={handleDiscover} className="mt-3 text-xs text-blue-400 hover:text-blue-300">
                   Run Discover to fetch jobs →
                 </button>
