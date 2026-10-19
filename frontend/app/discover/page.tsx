@@ -158,11 +158,15 @@ export default function Discover() {
                         {j.score}
                       </span>
                     )}
-                    {j.id && (
+                    {j.id && j.in_feed !== false ? (
                       <Link href={`/jobs/${j.id}`} className="text-xs text-blue-400 hover:text-blue-300 transition-colors">
                         Details →
                       </Link>
-                    )}
+                    ) : j.external_url || j.url ? (
+                      <a href={j.external_url ?? j.url} target="_blank" rel="noopener noreferrer" className="text-xs text-slate-400 hover:text-blue-300 transition-colors">
+                        View posting ↗
+                      </a>
+                    ) : null}
                   </div>
                 </div>
               ))}

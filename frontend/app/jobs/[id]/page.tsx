@@ -229,6 +229,20 @@ export default function JobDetail() {
   const company = String(job.company ?? '—')
   const score = job.score != null ? Number(job.score) : null
   const description = String(job.description ?? '')
+  // UI-cleanliness fix: scraped descriptions can still contain raw HTML
+  // (p/li/strong tags, style attrs, Â mojibake). Strip to plain text before
+  // rendering — applied at render time so it also fixes already-stored jobs.
+  const cleanDescription = (() => {
+    if (!description) return ''
+    let t = description
+    try { t = t.replace(/Ã‚|Ã¢â‚¬|Ã¢|Â/g, ' ') } catch { /* noop */ }
+    t = t.replace(/<\/p\s*>|<br\s*\/?>|<\/div\s*>|<\/h[1-6]\s*>/gi, '\n')
+    t = t.replace(/<li[^>]*>/gi, '\n• ')
+    t = t.replace(/<[^>]+>/g, ' ')
+    t = t.replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    return t.split('\n').map(l => l.replace(/[ \t]{2,}/g, ' ').trim()).filter(Boolean).join('\n')
+  })()
   const jobUrl = String(job.url ?? job.applyUrl ?? job.apply_url ?? '')
   const hasUrl = jobUrl.length > 5
   const matchedSkills = Array.isArray(job.matched_skills) ? job.matched_skills as string[] : []
@@ -327,7 +341,7 @@ export default function JobDetail() {
 
       {tab === 'Overview' && (
         <div className="space-y-5">
-          {!description ? (
+          {!cleanDescription ? (
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 text-center">
               <div className="text-slate-500 text-sm mb-2">No job description available</div>
               <div className="text-slate-600 text-xs">
@@ -340,7 +354,7 @@ export default function JobDetail() {
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
               <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Job Description</div>
               <div className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto">
-                {description}
+                {cleanDescription}
               </div>
             </div>
           )}

@@ -78,6 +78,7 @@ class DailyDigest:
             location=self._li_loc,
             candidate_skills=self._skills,
             max_pages=2,
+            max_detail_fetches=6,  # worker-timeout fix: cap expensive per-card scoring
         )
         logger.info(f"DailyDigest: LinkedIn returned {len(linkedin_jobs)} scored listings")
 

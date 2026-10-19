@@ -83,7 +83,25 @@ def fetch_linkedin(
     candidate_skills: Optional[List[str]] = None,
     max_pages: int = 2,
     min_score: int = 50,
+    max_detail_fetches: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
+    """Scrape + score LinkedIn job cards.
+
+    Worker-timeout fix: detail fetch + 2 LLM calls per card made /discover
+    exceed gunicorn's worker timeout when many cards are found (20 cards x
+    ~10s fallback chain each). max_detail_fetches caps how many cards get the
+    expensive full scoring path; the rest keep their card-level data and a
+    neutral score so they still flow into the feed. Default cap 6 (env
+    LINKEDIN_MAX_DETAILS overrides). None/0 => no cap (old behavior).
+    """
+    if max_detail_fetches is None:
+        try:
+            max_detail_fetches = int(os.environ.get("LINKEDIN_MAX_DETAILS", "6"))
+        except ValueError:
+            max_detail_fetches = 6
+    if max_detail_fetches == 0:
+        max_detail_fetches = None  # explicit no-cap
+
     cards: List[Dict[str, Any]] = []
     for page in range(max_pages):
         url = _SEARCH_URL.format(
@@ -111,8 +129,19 @@ def fetch_linkedin(
     logger.info(f"LinkedIn: {len(cards)} cards found")
 
     scored: List[Dict[str, Any]] = []
+    detail_budget = max_detail_fetches  # worker-timeout fix: cap the expensive path
     for card in cards:
-        description = _fetch_detail(card["id"]) or ""
+        if detail_budget is None or detail_budget > 0:
+            description = _fetch_detail(card["id"]) or ""
+            if detail_budget is not None:
+                detail_budget -= 1
+        else:
+            description = ""
+            card["score"] = 50
+            card["passes"] = True
+            card["score_capped"] = True  # marked: not fully scored (budget)
+            scored.append(card)
+            continue
         card["description"] = description
         card["date_posted"] = ""
         if not description:

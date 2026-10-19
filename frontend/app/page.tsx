@@ -333,7 +333,7 @@ export default function Dashboard() {
           <div className="bg-slate-900 border border-blue-900/40 rounded-xl overflow-hidden">
             <div className="divide-y divide-slate-800/50">
               {discoverResult.top_jobs.map((j, i) => (
-                <Link key={i} href={j.id ? `/jobs/${j.id}` : '/jobs'}
+                <Link key={i} href={j.id && j.in_feed !== false ? `/jobs/${j.id}` : '/jobs'}
                   className="flex items-center justify-between px-5 py-3.5 hover:bg-slate-800/40 transition-colors group">
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-slate-600 font-mono w-4">#{i + 1}</span>

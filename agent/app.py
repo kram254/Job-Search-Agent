@@ -4,6 +4,7 @@ import os
 import json
 import logging
 import queue
+import re
 import threading
 import time
 from flask_cors import CORS
@@ -43,6 +44,34 @@ def datetime_now_iso() -> str:
     """ISO timestamp for persisted records (discover-persistence fix)."""
     import datetime as _dt
     return _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+
+def sanitize_job_description(text: str) -> str:
+    """HTML/mojibake cleanup for scraped descriptions (UI-readability fix).
+
+    Scraped descriptions arrive as raw HTML (p tags, li tags, inline styles)
+    with double-encoded entities (Â artifacts). Strip to clean plain text so
+    the frontend renders readable paragraphs instead of markup.
+    """
+    if not text:
+        return ""
+    t = str(text)
+    # 1) mojibake: UTF-8 bytes mis-decoded as latin-1/cp1252 ("Â â€™" etc.)
+    try:
+        t = t.encode("latin-1", errors="ignore").decode("utf-8", errors="ignore")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    # 2) block-level tags become newlines; <li> becomes a bullet
+    t = re.sub(r"(?i)</p\s*>|<br\s*/?>|</div\s*>|</h[1-6]\s*>", "\n", t)
+    t = re.sub(r"(?i)<li[^>]*>", "\n- ", t)
+    # 3) drop every remaining tag (style attrs, strong, spans...)
+    t = re.sub(r"<[^>]+>", " ", t)
+    # 4) decode entities (&amp; &nbsp; &#163; ...)
+    import html as _html
+    t = _html.unescape(t)
+    # 5) collapse whitespace runs, trim per line
+    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in t.splitlines()]
+    return "\n".join(ln for ln in lines if ln)
 
 orchestrator = None
 
@@ -1095,25 +1124,49 @@ def discover():
         # export_to_jobs_raw. Wrapped in try/except: discovery's own response
         # and notifications are unaffected if persistence fails.
         persisted = {"added": 0, "total_in_feed": 0}
+        id_by_url = {}  # url -> final feed id, so the response can link correctly
         try:
             all_jobs = result.get("all_jobs") or []
             with open(JOBS_RAW) as _f:
                 existing_jobs = json.load(_f)
             existing_urls = {str(j.get("url") or j.get("link") or "") for j in existing_jobs}
             existing_urls.discard("")
+            # index existing feed entries by url too, so already-known jobs can
+            # still be linked from the discovery response (404-link fix)
+            existing_id_by_url = {
+                str(j.get("url") or j.get("link") or ""): str(j.get("id"))
+                for j in existing_jobs
+            }
             next_id = max([int(j.get("id")) for j in existing_jobs if str(j.get("id", "")).isdigit()] or [0]) + 1
             added = 0
             for job in all_jobs:
                 url = str(job.get("url") or "")
-                if not url or url in existing_urls:
+                if not url:
                     continue
+                if url in existing_urls:
+                    # 404-link fix: remember the EXISTING feed id for this url
+                    if url in existing_id_by_url:
+                        id_by_url[url] = existing_id_by_url[url]
+                    continue
+                # prefer the scraper's own stable id when it is numeric and not
+                # already taken in the feed (keeps Discover page links and feed
+                # ids in sync); otherwise continue the sequential counter
+                scrape_id = str(job.get("id") or "")
+                taken_ids = {str(j.get("id")) for j in existing_jobs}
+                if scrape_id.isdigit() and scrape_id not in taken_ids:
+                    entry_id = scrape_id
+                    if int(scrape_id) >= next_id:
+                        next_id = int(scrape_id) + 1
+                else:
+                    entry_id = str(next_id)
+                    next_id += 1
                 entry = {
-                    "id": str(next_id),
+                    "id": entry_id,
                     "title": job.get("title", ""),
                     "company": job.get("company", ""),
                     "url": url,
                     "location": job.get("location", ""),
-                    "description": job.get("description", ""),
+                    "description": sanitize_job_description(job.get("description", "")),
                     "score": job.get("score", 0),
                     "match_ratio": job.get("match_ratio", 0),
                     "matched_skills": job.get("matched_skills", []),
@@ -1123,7 +1176,7 @@ def discover():
                 }
                 existing_jobs.append(entry)
                 existing_urls.add(url)
-                next_id += 1
+                id_by_url[url] = entry_id
                 added += 1
             if added:
                 with open(JOBS_RAW, "w") as _f:
@@ -1132,6 +1185,18 @@ def discover():
             logging.info(f"discover persistence: +{added} jobs (feed now {len(existing_jobs)})")
         except Exception as _persist_err:
             logging.warning(f"discover persistence skipped: {_persist_err}")
+
+        # 404-link fix: annotate the response's top_jobs with their REAL feed
+        # ids (or the external apply url when a job is not in the feed), so
+        # every "Details ->" link resolves. Additive: original fields unchanged.
+        for tj in result.get("top_jobs", []):
+            url = str(tj.get("url") or "")
+            if url and url in id_by_url:
+                tj["id"] = id_by_url[url]
+                tj["in_feed"] = True
+            else:
+                tj["in_feed"] = False
+                tj["external_url"] = url
 
         _broadcast_event("discovery_complete", {
             "total": result["remoteok_count"] + result["linkedin_count"],

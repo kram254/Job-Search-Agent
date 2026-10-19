@@ -6,12 +6,21 @@ services:
       pip install -r requirements.txt
       playwright install chromium
     # Fix: default sync worker timeout (30s) kills the worker mid-request when
-    # an LLM call chains Anthropic(401)->OpenRouter fallback (observed WORKER
-    # TIMEOUT + SIGKILL on /profile/import). 180s covers the fallback chain.
-    startCommand: gunicorn agent.app:app --timeout 180 --graceful-timeout 30
+    # an LLM call chains Anthropic(401)->OpenRouter fallback, or when the
+    # LinkedIn scraper scores many cards (observed WORKER TIMEOUT + SIGKILL on
+    # /profile/import and /discover). 600s covers the worst chains; the
+    # scraper now also caps per-card scoring (LINKEDIN_MAX_DETAILS=6).
+    # NOTE: if Render does not pick up the new startCommand on an existing
+    # service, apply "Sync" in the dashboard OR set env var
+    # GUNICORN_TIMEOUT=600 and change the start command once manually.
+    startCommand: gunicorn agent.app:app --timeout 600 --graceful-timeout 30
     envVars:
       - key: PORT
         value: 10000
+      - key: GUNICORN_TIMEOUT
+        value: "600"
+      - key: LINKEDIN_MAX_DETAILS
+        value: "6"
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: OPENROUTER_API_KEY
