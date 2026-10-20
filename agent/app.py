@@ -1536,6 +1536,138 @@ def insiders():
         return jsonify({"error": str(e)}), 500
 
 
+# ---------- ai-job-search framework bridge (additive integration) ----------
+
+@app.route('/framework/evaluate', methods=['POST'])
+def framework_evaluate():
+    """Full ai-job-search framework evaluation for one job: integrity gate ->
+    eligibility gate -> language gate -> 5-dimension weighted score + verdict.
+
+    Accepts job_id (fetches from feed) or raw job_text. The LLM dimension
+    scores reuse the existing FieldMapper evaluation; gates and weighting run
+    locally (deterministic)."""
+    data = request.json or {}
+    job_text = data.get('job_text', '')
+    job_id = data.get('job_id', '')
+    try:
+        from agent.ranking.framework_bridge import full_framework_evaluation
+        orch = get_orchestrator()
+
+        if job_id and not job_text:
+            job = next((j for j in orch.jobs_raw if str(j.get("id")) == str(job_id)), None)
+            if not job:
+                return jsonify({"error": f"Job {job_id} not found"}), 404
+            job_text = job.get("description") or job.get("descriptionText") or ""
+            if not job_text:
+                return jsonify({"error": "Job has no description to evaluate"}), 400
+
+        if not job_text:
+            return jsonify({"error": "Provide job_id or job_text"}), 400
+
+        # dimension scores via the existing evaluator (archetype/global flow),
+        # mapped onto the framework's 4 numeric dimensions
+        from agent.llm.field_mapper import FieldMapper
+        mapper = FieldMapper(
+            candidate_profile=orch.candidate_profile,
+            job_description=job_text,
+        )
+        evaluation = mapper.evaluate_job()
+        summary = mapper.get_evaluation_summary()
+        scores = summary.get("scores", {})
+
+        def _norm(block_score: Any) -> float:
+            """Block scores are 0-5; framework dimensions are 0-100."""
+            try:
+                v = float(block_score)
+                return v * 20.0 if v <= 5.0 else min(v, 100.0)
+            except (TypeError, ValueError):
+                return 50.0
+
+        loc_text = f"{job_text[:500].lower()}"
+        location_pass = not any(w in loc_text for w in ("relocation required", "on-site only", "must relocate"))
+
+        llm_dims = {
+            "technical_skills": _norm(scores.get("technical", scores.get("skills", 3))),
+            "experience_match": _norm(scores.get("experience", 3)),
+            "behavioral_culture": _norm(scores.get("culture", scores.get("behavioral", 3))),
+            "career_alignment": _norm(scores.get("motivation", scores.get("career", 3))),
+            "location_pass": location_pass,
+            "location_notes": "assessed from posting text (remote/unknown = pass)",
+        }
+
+        result = full_framework_evaluation(job_text, orch.candidate_profile, llm_dims)
+        result["job_id"] = job_id or None
+        result["archetype"] = summary.get("archetype")
+        result["legacy_global_score"] = summary.get("global_score")
+        return jsonify(result)
+    except Exception as e:
+        logging.exception("framework evaluate error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/framework/track', methods=['POST'])
+def framework_track():
+    """Record an application in the framework's tracker CSV (dedup by
+    company+role). Mirrors the ai-job-search job_search_tracker.csv format."""
+    data = request.json or {}
+    company = (data.get('company') or '').strip()
+    role = (data.get('role') or '').strip()
+    if not company or not role:
+        return jsonify({"error": "Provide company and role"}), 400
+    try:
+        from agent.tracker.framework_tracker import TrackerCSV
+        tracker = TrackerCSV(csv_path=str(DATA_DIR / "job_search_tracker.csv"))
+        result = tracker.add(
+            company=company, role=role,
+            status=data.get('status', 'drafted'),
+            channel=data.get('channel', 'email'),
+            contact_person=data.get('contact_person', ''),
+            fit_rating=data.get('fit_rating', ''),
+            notes=data.get('notes', ''),
+            cv_file=data.get('cv_file', ''),
+            cover_letter_file=data.get('cover_letter_file', ''),
+            source=data.get('source', ''),
+            deadline=data.get('deadline', ''),
+        )
+        return jsonify({"result": result, "stats": tracker.stats()})
+    except Exception as e:
+        logging.exception("framework track error")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/framework/outcomes', methods=['GET'])
+def framework_outcomes():
+    """/outcome view: open applications, follow-up-needing rows, stats."""
+    try:
+        from agent.tracker.framework_tracker import TrackerCSV
+        tracker = TrackerCSV(csv_path=str(DATA_DIR / "job_search_tracker.csv"))
+        return jsonify({
+            "open": tracker.open_applications(),
+            "needs_followup": tracker.needs_followup(),
+            "stats": tracker.stats(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/framework/outcomes/update', methods=['POST'])
+def framework_outcome_update():
+    """/outcome update: set a row's status (interview, offer, rejected...)."""
+    data = request.json or {}
+    company = (data.get('company') or '').strip()
+    role = (data.get('role') or '').strip()
+    status = (data.get('status') or '').strip()
+    if not company or not role or not status:
+        return jsonify({"error": "Provide company, role, status"}), 400
+    try:
+        from agent.tracker.framework_tracker import TrackerCSV
+        tracker = TrackerCSV(csv_path=str(DATA_DIR / "job_search_tracker.csv"))
+        changed = tracker.update_status(company, role, status, note=data.get('note', ''))
+        return jsonify({"updated": changed, "stats": tracker.stats()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT") or 5000)
     app.run(host='0.0.0.0', port=port)

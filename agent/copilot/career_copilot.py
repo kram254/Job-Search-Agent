@@ -46,6 +46,10 @@ ACTION_KEYS = {
     "scan",
     "follow_ups",
     "insights",
+    # ai-job-search framework bridge (v2 integration)
+    "framework_evaluate",
+    "framework_track",
+    "framework_outcomes",
 }
 
 
