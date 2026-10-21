@@ -15,6 +15,9 @@ type DiscoveredJob = {
   salary_range?: string
   location?: string
   source?: string
+  // discover-persistence annotations (backend adds these to top_jobs)
+  in_feed?: boolean
+  external_url?: string
 }
 
 type RunHistory = {
