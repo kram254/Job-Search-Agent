@@ -4,7 +4,11 @@ services:
     env: python
     buildCommand: |
       pip install -r requirements.txt
-      playwright install chromium
+      # Bulk-apply fix: the runtime looked for chromium_headless_shell-1248
+      # and missed it. PLAYWRIGHT_BROWSERS_PATH pins a shared location used by
+      # BOTH build and runtime (also set in envVars below).
+      export PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/src/.pw-browsers
+      playwright install chromium --with-deps || playwright install chromium
     # Fix: default sync worker timeout (30s) kills the worker mid-request when
     # an LLM call chains Anthropic(401)->OpenRouter fallback, or when the
     # LinkedIn scraper scores many cards (observed WORKER TIMEOUT + SIGKILL on
@@ -15,6 +19,8 @@ services:
     # GUNICORN_TIMEOUT=600 and change the start command once manually.
     startCommand: gunicorn agent.app:app --timeout 600 --graceful-timeout 30
     envVars:
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/project/src/.pw-browsers
       - key: PORT
         value: 10000
       - key: GUNICORN_TIMEOUT
