@@ -93,6 +93,11 @@ class ApplicationOrchestrator:
         self.browser = BrowserWrapper(headless=_headless)
 
         self.platform_handlers: Dict[str, BasePlatformHandler] = {}
+        # current_handler init (bulk-apply fix): the apply workflow reads
+        # self.current_handler before any handler is set in this path
+        # ('object has no attribute current_handler') — start as None and
+        # let the getattr-based accessors handle it.
+        self.current_handler: Optional[BasePlatformHandler] = None
         self.current_evaluation: Optional[JobEvaluation] = None
         self.pdf_generator = PDFGenerator(output_dir="output/cvs")
         self.tailored_cv_path: Optional[str] = None
@@ -463,6 +468,9 @@ class ApplicationOrchestrator:
         if not job_meta:
             raise ValueError(f"Job ID {job_id} not found in jobs_raw.json")
         self.job_meta = job_meta
+        # apply-mode session marker: _checkpoint_state uses this when
+        # current_handler isn't set yet (apply-mode path)
+        self._apply_session_id = session_id
 
         job_description = job_meta.get("description", "")
         company_name = job_meta.get("company", "unknown")
@@ -961,7 +969,11 @@ class ApplicationOrchestrator:
         into a JSON file under data/sessions/<session_id>/.
         Returns the file path for later retrieval.
         """
-        session_dir = SESSIONS_DIR / self.current_handler.session_id
+        # current_handler may be None in the apply-mode path (it's set on the
+        # platform handler attribute instead); fall back gracefully
+        handler = getattr(self, "current_handler", None)
+        session_id = getattr(handler, "session_id", None) or getattr(self, "_apply_session_id", None) or "adhoc"
+        session_dir = SESSIONS_DIR / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
         checkpoint = {
