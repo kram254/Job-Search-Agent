@@ -4,20 +4,65 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 class BrowserWrapper:
+    # Thread-local launch state (bulk-apply fix #2): Playwright sync objects
+    # are thread-bound; a single shared instance crashed with "Playwright
+    # Sync API inside the asyncio loop" when request threads / the scan's
+    # asyncio loop interleaved. Each thread now gets its own lazily-launched
+    # browser, stored in thread-local storage.
+    _tls = threading.local()
+
     def __init__(self, headless: bool = True):
         self.headless = headless
-        self.playwright = None
-        self.browser = None
-        self.context = None
-        self.page = None
         self.session_dir = None
         self._storage_state_path: str = None
         self._launch_lock = threading.Lock()
 
+    # --- thread-local accessors --------------------------------------- #
+    @property
+    def _state(self) -> dict:
+        if not hasattr(BrowserWrapper._tls, "state"):
+            BrowserWrapper._tls.state = {
+                "playwright": None, "browser": None,
+                "context": None, "page": None,
+            }
+        return BrowserWrapper._tls.state
+
+    @property
+    def playwright(self):
+        return self._state.get("playwright")
+
+    @playwright.setter
+    def playwright(self, value):
+        self._state["playwright"] = value
+
+    @property
+    def browser(self):
+        return self._state.get("browser")
+
+    @browser.setter
+    def browser(self, value):
+        self._state["browser"] = value
+
+    @property
+    def context(self):
+        return self._state.get("context")
+
+    @context.setter
+    def context(self, value):
+        self._state["context"] = value
+
+    @property
+    def page(self):
+        return self._state.get("page")
+
+    @page.setter
+    def page(self, value):
+        self._state["page"] = value
+
     def ensure_launched(self, headless: bool = None, storage_state_path: str = None):
-        """Lazy-launch guard (bulk-apply fix): web-request threads call
-        navigate()/page before launch() ever runs, hitting
-        'NoneType has no attribute goto'. Idempotent — safe to call anywhere."""
+        """Lazy-launch guard: web-request threads call navigate()/page before
+        launch() ever runs, hitting 'NoneType has no attribute goto'.
+        Idempotent — safe to call anywhere, per-thread."""
         if self.page is not None:
             return
         with self._launch_lock:
@@ -86,6 +131,17 @@ class BrowserWrapper:
             except Exception:
                 pass
         if self.browser:
-            self.browser.close()
+            try:
+                self.browser.close()
+            except Exception:
+                pass
         if self.playwright:
-            self.playwright.stop()
+            try:
+                self.playwright.stop()
+            except Exception:
+                pass
+        # clear THIS thread's state so the next call relaunches cleanly
+        BrowserWrapper._tls.state = {
+            "playwright": None, "browser": None,
+            "context": None, "page": None,
+        }

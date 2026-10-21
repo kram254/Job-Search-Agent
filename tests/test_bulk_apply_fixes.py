@@ -17,13 +17,13 @@ class TestBrowserLazyLaunch:
 
         def fake_launch(headless=None, storage_state_path=None):
             calls["n"] += 1
-            w.page = object()  # mark launched
+            w.page = object()  # mark launched (this thread's TLS state)
 
         w.launch = fake_launch
         w.ensure_launched()
         w.ensure_launched()
         w.ensure_launched()
-        assert calls["n"] == 1, "launch should run exactly once"
+        assert calls["n"] == 1, "launch should run exactly once per thread"
 
     def test_navigate_does_not_hit_none_page(self):
         w = BrowserWrapper(headless=True)
@@ -38,6 +38,23 @@ class TestBrowserLazyLaunch:
         w.launch = fake_launch
         w.navigate("https://example.com/job")
         assert navigated["url"] == "https://example.com/job"
+
+    def test_thread_local_isolation(self):
+        """Each thread gets its own launch state (sync-API-in-asyncio fix)."""
+        w = BrowserWrapper(headless=True)
+        results = {}
+
+        def set_marker(tag):
+            w.launch = lambda **kw: None
+            w.page = tag
+            results[tag] = w.page
+
+        threads = [threading.Thread(target=set_marker, args=(f"t{i}",)) for i in range(2)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        assert results == {"t0": "t0", "t1": "t1"}
+        # main thread's state is separate and still empty
+        assert w.page is None
 
 
 # ---------- frontend URL resolver (logic mirror in python for the test) ----------
