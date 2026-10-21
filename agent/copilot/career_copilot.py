@@ -145,6 +145,8 @@ class CareerCopilot:
 
     def _extract_actions(self, text: str) -> tuple:
         """Pull ACTION: lines out of the model reply; return (clean_text, actions)."""
+        if not text:
+            return "", []
         actions = []
         clean_lines = []
         for line in text.splitlines():
@@ -191,6 +193,9 @@ class CareerCopilot:
             raw_reply = self.llm.complete_for_step(
                 "generator", prompt, system=SYSTEM_PROMPT, max_tokens=1024, temperature=0.4
             )
+            if not raw_reply or not str(raw_reply).strip():
+                # some provider fallback paths return None/empty without raising
+                raise ValueError("empty LLM response")
         except Exception as e:
             logger.error(f"[copilot] LLM call failed: {e}")
             raw_reply = (
