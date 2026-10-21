@@ -33,6 +33,12 @@ _sse_lock = threading.Lock()
 # candidate data anywhere new.
 _parsed_cache: dict = {'latest': None}
 
+# Async-apply registry (bulk-apply fix): apply workflows run in background
+# threads; /approve returns an apply_job_id and /apply-status/<id> reports
+# progress. In-memory by design (worker restart = jobs lost, acceptable for
+# a single-user tool).
+_apply_jobs: dict = {}
+
 
 def datetime_infix() -> str:
     """Timestamp fragment for temp upload filenames."""
@@ -1258,26 +1264,52 @@ def approve():
         if orch.ledger.already_applied(url, company, title):
             return jsonify({"status": "duplicate_blocked", "message": "Already applied to this role"})
 
-        # Sync/async isolation fix: the bulk-apply queue + /scan's asyncio.run
-        # can leave Playwright believing a loop is active in this worker, so a
-        # direct sync launch 403s with "Sync API inside the asyncio loop".
-        # Running the whole apply workflow in a fresh dedicated thread gives
-        # Playwright a clean thread with no loop state.
-        import concurrent.futures
-        def _run():
-            return orch.start_from_url(
-                apply_url=url,
-                mode=mode,
-                cv_path=cv_path or 'CVs/My CVc.md',
-                title=title,
-                company=company,
-            )
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
-            future = _ex.submit(_run)
+        # Async-apply fix: the apply workflow (LLM eval + CV + browser) takes
+        # minutes, but Render's edge proxy kills HTTP requests at ~30s (502)
+        # — every synchronous /approve from the bulk-apply queue died with
+        # 'Failed to fetch' while the backend kept working. /approve now
+        # returns a job id immediately; the workflow runs in a background
+        # thread; GET /apply-status/<job_id> reports progress. The response
+        # shape stays backward compatible (async=true + job_id added).
+        apply_job_id = f"apply_{int(time.time() * 1000)}"
+        _apply_jobs[apply_job_id] = {
+            "status": "queued", "url": url, "title": title,
+            "company": company, "created_at": datetime_now_iso(),
+        }
+
+        def _run_apply_workflow_async():
+            job_state = _apply_jobs[apply_job_id]
             try:
-                result = future.result(timeout=540)  # under gunicorn 600s
-            except concurrent.futures.TimeoutError:
-                return jsonify({"error": "Application workflow timed out (540s)"}), 504
+                job_state["status"] = "running"
+                # fresh dedicated thread state for Playwright (sync-in-asyncio fix)
+                import concurrent.futures
+                def _run():
+                    return orch.start_from_url(
+                        apply_url=url,
+                        mode=mode,
+                        cv_path=cv_path or 'CVs/My CVc.md',
+                        title=title,
+                        company=company,
+                    )
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+                    future = _ex.submit(_run)
+                    result = future.result(timeout=540)
+                job_state["status"] = "done"
+                job_state["result"] = result
+            except Exception as e:
+                job_state["status"] = "failed"
+                job_state["error"] = str(e)
+                logging.exception(f"[apply-job {apply_job_id}] failed")
+
+        threading.Thread(target=_run_apply_workflow_async, daemon=True).start()
+
+        _broadcast_event("application_approved", {"url": url, "async": True, "job_id": apply_job_id})
+        return jsonify({
+            "async": True,
+            "apply_job_id": apply_job_id,
+            "status": "queued",
+            "message": "Application workflow started; poll /apply-status/<id>",
+        })
 
         if result.get("status") in ("submitted", "draft_saved"):
             from agent.tracker.followup_tracker import FollowUpTracker
@@ -1701,6 +1733,33 @@ def framework_outcome_update():
         return jsonify({"updated": changed, "stats": tracker.stats()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/apply-status/<apply_job_id>', methods=['GET'])
+def apply_status(apply_job_id):
+    """Poll an async apply job started by /approve (bulk-apply fix)."""
+    job_state = _apply_jobs.get(apply_job_id)
+    if not job_state:
+        return jsonify({"error": "Unknown apply_job_id (worker restarted or expired)"}), 404
+    payload = {
+        "apply_job_id": apply_job_id,
+        "status": job_state["status"],
+        "url": job_state.get("url"),
+        "title": job_state.get("title"),
+        "company": job_state.get("company"),
+    }
+    if job_state["status"] == "done":
+        result = job_state.get("result", {})
+        payload["result"] = {
+            k: result.get(k) for k in
+            ("status", "session_id", "job_id", "archetype", "evaluation_summary")
+            if result.get(k) is not None
+        }
+        # keep the compat shape the old synchronous callers expected
+        payload.update({k: result.get(k) for k in ("status", "session_id") if result.get(k) is not None})
+    elif job_state["status"] == "failed":
+        payload["error"] = job_state.get("error")
+    return jsonify(payload)
 
 
 if __name__ == '__main__':

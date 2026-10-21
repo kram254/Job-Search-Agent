@@ -70,6 +70,19 @@ const api = {
   applyFromUrl: (d: object) =>
     req('/apply-from-url', { method: 'POST', body: JSON.stringify(d) }),
   approve: (d: object) => req('/approve', { method: 'POST', body: JSON.stringify(d) }),
+  // async-apply fix: /approve returns { apply_job_id }; poll for the result
+  applyStatus: (id: string) => req(`/apply-status/${id}`),
+  pollApply: async (id: string, onStatus?: (s: string) => void, maxMs = 600000): Promise<any> => {
+    const start = Date.now()
+    while (Date.now() - start < maxMs) {
+      await new Promise(r => setTimeout(r, 4000))
+      const s = await req(`/apply-status/${id}`)
+      onStatus?.(s.status)
+      if (s.status === 'done') return s.result ?? s
+      if (s.status === 'failed') throw new Error(s.error || 'Application workflow failed')
+    }
+    throw new Error('Application workflow timed out (10 min)')
+  },
 
   outreach: (d: object) => req('/outreach', { method: 'POST', body: JSON.stringify(d) }),
   deepResearch: (d: object) =>

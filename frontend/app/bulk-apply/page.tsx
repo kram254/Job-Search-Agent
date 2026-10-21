@@ -107,20 +107,34 @@ export default function BulkApply() {
           setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: 'failed', error: 'No apply URL' } : q))
           continue
         }
-        const result = await api.approve({
+        // async-apply fix: /approve returns a job id immediately (Render's
+        // edge kills >30s requests); poll /apply-status until done/failed
+        const ack = await api.approve({
           url,
           title: job.title ?? '',
           company: job.company ?? '',
           mode,
           cv_path: cvVariant.path,
         })
-        doneCount++
-        setDone(doneCount)
-        setQueue(prev => prev.map((q, idx) => idx === i ? {
-          ...q,
-          status: 'done',
-          session_id: String(result.session_id ?? ''),
-        } : q))
+        if (ack.async && ack.apply_job_id) {
+          const result = await api.pollApply(ack.apply_job_id)
+          doneCount++
+          setDone(doneCount)
+          setQueue(prev => prev.map((q, idx) => idx === i ? {
+            ...q,
+            status: 'done',
+            session_id: String(result.session_id ?? ''),
+          } : q))
+        } else {
+          // legacy synchronous response (backward compat)
+          doneCount++
+          setDone(doneCount)
+          setQueue(prev => prev.map((q, idx) => idx === i ? {
+            ...q,
+            status: 'done',
+            session_id: String(ack.session_id ?? ''),
+          } : q))
+        }
       } catch (e) {
         setQueue(prev => prev.map((q, idx) => idx === i ? {
           ...q,
