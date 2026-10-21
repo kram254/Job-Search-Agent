@@ -1258,13 +1258,26 @@ def approve():
         if orch.ledger.already_applied(url, company, title):
             return jsonify({"status": "duplicate_blocked", "message": "Already applied to this role"})
 
-        result = orch.start_from_url(
-            apply_url=url,
-            mode=mode,
-            cv_path=cv_path or 'CVs/My CVc.md',
-            title=title,
-            company=company,
-        )
+        # Sync/async isolation fix: the bulk-apply queue + /scan's asyncio.run
+        # can leave Playwright believing a loop is active in this worker, so a
+        # direct sync launch 403s with "Sync API inside the asyncio loop".
+        # Running the whole apply workflow in a fresh dedicated thread gives
+        # Playwright a clean thread with no loop state.
+        import concurrent.futures
+        def _run():
+            return orch.start_from_url(
+                apply_url=url,
+                mode=mode,
+                cv_path=cv_path or 'CVs/My CVc.md',
+                title=title,
+                company=company,
+            )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+            future = _ex.submit(_run)
+            try:
+                result = future.result(timeout=540)  # under gunicorn 600s
+            except concurrent.futures.TimeoutError:
+                return jsonify({"error": "Application workflow timed out (540s)"}), 504
 
         if result.get("status") in ("submitted", "draft_saved"):
             from agent.tracker.followup_tracker import FollowUpTracker
