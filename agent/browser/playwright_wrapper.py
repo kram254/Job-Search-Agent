@@ -37,7 +37,31 @@ class BrowserWrapper:
         if storage_state_path:
             self._storage_state_path = storage_state_path
         self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=self.headless)
+        try:
+            self.browser = self.playwright.chromium.launch(headless=self.headless)
+        except Exception as e:
+            # Bulk-apply live-test fix: the running service's browser binary
+            # can be missing (Render retrofits neither startCommand nor env
+            # vars on existing services). Fall back through channel/executable
+            # options before giving up, so the deploy gap isn't fatal.
+            msg = str(e)
+            if "Executable doesn't exist" in msg or "headless shell" in msg:
+                try:
+                    self.browser = self.playwright.chromium.launch(
+                        headless=self.headless, channel="chromium")
+                except Exception:
+                    try:
+                        self.browser = self.playwright.chromium.launch(
+                            headless=self.headless, executable_path=os.environ.get("CHROMIUM_PATH", ""))
+                    except Exception as e3:
+                        raise RuntimeError(
+                            f"Playwright browser unavailable: {e3}. "
+                            "Remediation: set PLAYWRIGHT_BROWSERS_PATH env var and redeploy "
+                            "(render.yaml now pins it), or run 'playwright install chromium' "
+                            "in the service shell."
+                        ) from e3
+            else:
+                raise
         ctx_kwargs = {}
         if self._storage_state_path and Path(self._storage_state_path).exists():
             ctx_kwargs["storage_state"] = self._storage_state_path
