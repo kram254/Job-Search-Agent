@@ -1181,6 +1181,14 @@ def discover():
             if added:
                 with open(JOBS_RAW, "w") as _f:
                     json.dump(existing_jobs, _f, indent=2)
+            # stale-memory fix: the orchestrator loads jobs_raw once at
+            # construction; refresh its in-memory copy so detail routes
+            # (match-explanation, evaluate, outreach) see discovered jobs too
+            try:
+                orch = get_orchestrator()
+                orch.jobs_raw = existing_jobs
+            except Exception:
+                pass
             persisted = {"added": added, "total_in_feed": len(existing_jobs)}
             logging.info(f"discover persistence: +{added} jobs (feed now {len(existing_jobs)})")
         except Exception as _persist_err:
