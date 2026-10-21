@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
-import api from '../../lib/api'
+import api, { resolveJobUrl } from '../../lib/api'
 
 type Job = { id: string; title?: string; company?: string; score?: number; match_ratio?: number; source?: string; archetype?: string }
 type QueueItem = { job: Job; status: 'queued' | 'running' | 'done' | 'failed' | 'skipped'; session_id?: string; error?: string }
@@ -101,7 +101,8 @@ export default function BulkApply() {
 
       try {
         const job = items[i].job
-        const url = String((job as Record<string,unknown>).url ?? (job as Record<string,unknown>).applyUrl ?? (job as Record<string,unknown>).apply_url ?? '')
+        // bulk-apply fix: resolve across all source-specific URL keys
+        const url = resolveJobUrl(job as Record<string, unknown>)
         if (!url) {
           setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: 'failed', error: 'No apply URL' } : q))
           continue

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
-import api from '../lib/api'
+import api, { resolveJobUrl } from '../lib/api'
 
 type Job = { id: string; title?: string; company?: string; score?: number; match_ratio?: number; source?: string; in_feed?: boolean; external_url?: string }
 type AppRecord = { title?: string; company?: string; status?: string; applied_at?: string }

@@ -1,4 +1,5 @@
 import os
+import threading
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
@@ -11,6 +12,24 @@ class BrowserWrapper:
         self.page = None
         self.session_dir = None
         self._storage_state_path: str = None
+        self._launch_lock = threading.Lock()
+
+    def ensure_launched(self, headless: bool = None, storage_state_path: str = None):
+        """Lazy-launch guard (bulk-apply fix): web-request threads call
+        navigate()/page before launch() ever runs, hitting
+        'NoneType has no attribute goto'. Idempotent — safe to call anywhere."""
+        if self.page is not None:
+            return
+        with self._launch_lock:
+            if self.page is not None:  # double-checked under lock
+                return
+            self.launch(headless=headless, storage_state_path=storage_state_path)
+
+    @property
+    def current_page(self):
+        """Page accessor that guarantees a launched session."""
+        self.ensure_launched()
+        return self.page
 
     def launch(self, headless: bool = None, storage_state_path: str = None):
         if headless is not None:
@@ -26,6 +45,7 @@ class BrowserWrapper:
         self.page = self.context.new_page()
 
     def navigate(self, url: str):
+        self.ensure_launched()  # bulk-apply fix: never None when navigating
         if self.page:
             self.page.goto(url, wait_until="networkidle")
 

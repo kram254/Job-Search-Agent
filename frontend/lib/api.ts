@@ -132,3 +132,14 @@ const api = {
 }
 
 export default api
+
+// Bulk-apply fix: job URLs live under different keys depending on the source
+// (LinkedIn scrapes use 'link'/'applyUrl', RemoteOK 'url', some empty strings).
+// Empty string is falsy but ?? doesn't skip it — coerce explicitly.
+export function resolveJobUrl(job: Record<string, unknown>): string {
+  for (const key of ['url', 'applyUrl', 'apply_url', 'link']) {
+    const v = job?.[key]
+    if (typeof v === 'string' && v.trim().startsWith('http')) return v.trim()
+  }
+  return ''
+}

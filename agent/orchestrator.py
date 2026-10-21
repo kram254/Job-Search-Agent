@@ -150,6 +150,9 @@ class ApplicationOrchestrator:
         Use Playwright to follow redirects until a stable URL is reached.
         Returns the final URL string.
         """
+        # bulk-apply fix: the browser may not be launched in web-request
+        # threads (batch/approve paths). ensure_launched is idempotent.
+        self.browser.ensure_launched()
         page = self.browser.page
         page.goto(url, wait_until="networkidle")
         final = page.url
