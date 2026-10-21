@@ -1752,7 +1752,7 @@ def apply_status(apply_job_id):
         result = job_state.get("result", {})
         payload["result"] = {
             k: result.get(k) for k in
-            ("status", "session_id", "job_id", "archetype", "evaluation_summary")
+            ("status", "session_id", "job_id", "archetype", "evaluation_summary", "error")
             if result.get(k) is not None
         }
         # keep the compat shape the old synchronous callers expected
