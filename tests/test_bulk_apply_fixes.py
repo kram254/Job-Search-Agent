@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -10,6 +11,15 @@ from agent.browser.playwright_wrapper import BrowserWrapper
 
 
 class TestBrowserLazyLaunch:
+
+    def setup_method(self, method):
+        # thread-local state persists on the pytest thread between tests —
+        # clear it so each test starts from a fresh launch state
+        if hasattr(BrowserWrapper._tls, "state"):
+            BrowserWrapper._tls.state = {
+                "playwright": None, "browser": None,
+                "context": None, "page": None,
+            }
 
     def test_ensure_launched_is_idempotent(self):
         w = BrowserWrapper(headless=True)
@@ -38,7 +48,6 @@ class TestBrowserLazyLaunch:
         w.launch = fake_launch
         w.navigate("https://example.com/job")
         assert navigated["url"] == "https://example.com/job"
-
     def test_thread_local_isolation(self):
         """Each thread gets its own launch state (sync-API-in-asyncio fix)."""
         w = BrowserWrapper(headless=True)
@@ -53,7 +62,7 @@ class TestBrowserLazyLaunch:
         for t in threads: t.start()
         for t in threads: t.join()
         assert results == {"t0": "t0", "t1": "t1"}
-        # main thread's state is separate and still empty
+        # main thread's TLS is separate and was never launched in THIS test
         assert w.page is None
 
 
