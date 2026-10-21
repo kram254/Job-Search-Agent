@@ -15,6 +15,8 @@ class BrowserWrapper:
     # asyncio loop interleaved. Each thread now gets its own lazily-launched
     # browser, stored in thread-local storage.
     _tls = threading.local()
+    _install_lock = threading.Lock()  # single-flight browser install
+    _install_attempted = False  # class-level: once per process
 
     def __init__(self, headless: bool = True):
         self.headless = headless
@@ -124,19 +126,23 @@ class BrowserWrapper:
         )
         if has_browser and not force:
             return
-        if getattr(BrowserWrapper, "_install_attempted", False) and not force:
-            return  # once per process; a second failing install won't help
-        BrowserWrapper._install_attempted = True
-        try:
-            logger.warning("[BrowserWrapper] installing chromium browsers...")
-            subprocess.run(
-                [sys.executable, "-m", "playwright", "install", "chromium"],
-                timeout=600, check=False,
-                capture_output=True,
-            )
-            logger.warning("[BrowserWrapper] playwright install finished")
-        except Exception as e:
-            logger.warning(f"[BrowserWrapper] playwright install failed: {e}")
+        # process-wide single-flight: concurrent installs race with
+        # ETXTBSY (spawn on a binary being written). A lock + completed
+        # flag makes exactly one install per process; others wait.
+        with BrowserWrapper._install_lock:
+            if getattr(BrowserWrapper, "_install_attempted", False) and not force:
+                return
+            BrowserWrapper._install_attempted = True
+            try:
+                logger.warning("[BrowserWrapper] installing chromium browsers...")
+                subprocess.run(
+                    [sys.executable, "-m", "playwright", "install", "chromium"],
+                    timeout=600, check=False,
+                    capture_output=True,
+                )
+                logger.warning("[BrowserWrapper] playwright install finished")
+            except Exception as e:
+                logger.warning(f"[BrowserWrapper] playwright install failed: {e}")
 
     def navigate(self, url: str):
         self.ensure_launched()  # bulk-apply fix: never None when navigating
