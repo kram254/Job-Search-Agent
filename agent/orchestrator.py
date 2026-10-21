@@ -550,7 +550,10 @@ class ApplicationOrchestrator:
             "draft_screenshot": result.get("draft_screenshot"),
             "draft_session_path": result.get("draft_session_path"),
             "fields_filled": result.get("fields_filled", 0),
-            "fields_skipped": result.get("fields_skipped", 0)
+            "fields_skipped": result.get("fields_skipped", 0),
+            # error-detail passthrough (apply-status debugging): the workflow's
+            # exception text was dropped here, making async failures opaque
+            "error": result.get("error"),
         }
 
     def _evaluate_job_for_apply(self, job_description: str, cv_path: str) -> None:
