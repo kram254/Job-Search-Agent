@@ -1294,6 +1294,23 @@ def approve():
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
                     future = _ex.submit(_run)
                     result = future.result(timeout=540)
+                # follow-up tracking moved into the async workflow (it was
+                # stranded after the early async return; without it, drafted
+                # applications never got 7/14/21-day follow-ups)
+                if result.get("status") in ("submitted", "draft_saved"):
+                    try:
+                        from agent.tracker.followup_tracker import FollowUpTracker
+                        tracker = FollowUpTracker(storage_path=str(DATA_DIR / "followups.json"))
+                        candidate_name = orch.candidate_profile.get("personal_details", {}).get("name", "")
+                        tracker.track(
+                            job_id=result.get("job_id", ""),
+                            company=company,
+                            title=title,
+                            archetype=result.get("archetype", ""),
+                            candidate_name=candidate_name,
+                        )
+                    except Exception as _track_err:
+                        logging.warning(f"[apply-job {apply_job_id}] followup tracking skipped: {_track_err}")
                 job_state["status"] = "done"
                 job_state["result"] = result
             except Exception as e:
