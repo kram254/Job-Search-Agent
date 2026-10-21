@@ -1194,6 +1194,20 @@ def discover():
         except Exception as _persist_err:
             logging.warning(f"discover persistence skipped: {_persist_err}")
 
+        # Alert-engine hook for discover (same as /scan's Phase 3 hook):
+        # new high-match (75+) listings raise alerts. Isolated try/except.
+        try:
+            from agent.alerts.alert_engine import evaluate_listings_for_alerts
+            fresh_alerts = evaluate_listings_for_alerts(
+                result.get("all_jobs") or [],
+                alerts_path=str(DATA_DIR / "alerts.json"),
+            )
+            if fresh_alerts:
+                _broadcast_event("alerts_new", {"count": len(fresh_alerts)})
+                logging.info(f"discover alerts: +{len(fresh_alerts)}")
+        except Exception as _alert_err:
+            logging.warning(f"discover alert generation skipped: {_alert_err}")
+
         # 404-link fix: annotate the response's top_jobs with their REAL feed
         # ids (or the external apply url when a job is not in the feed), so
         # every "Details ->" link resolves. Additive: original fields unchanged.
