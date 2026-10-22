@@ -1291,6 +1291,36 @@ def approve():
                 # instance. A process-wide apply semaphore serializes
                 # workflows: one browser alive at a time, the rest queue.
                 with _apply_semaphore:
+                    # Memory pre-check (OOM fix): the job-board sources
+                    # (RemoteOK etc.) have NO application form — the browser
+                    # launches, finds nothing fillable, and burns 300MB for
+                    # nothing. Board URLs get a no-browser fast path: mark
+                    # 'manual_apply' with the posting link; real ATS URLs
+                    # (greenhouse/lever/ashby/indeed) keep the full browser
+                    # workflow.
+                    def _has_fillable_form(u: str) -> bool:
+                        hosts = ("greenhouse", "grnh.se", "lever.co", "ashbyhq",
+                                 "ashby", "indeed", "myworkdayjobs", "workday",
+                                 "bamboohr", "icims", "taleo", "mercor")
+                        return any(h in u.lower() for h in hosts)
+
+                    if not _has_fillable_form(url):
+                        job_state["status"] = "done"
+                        job_state["result"] = {
+                            "status": "manual_apply",
+                            "message": ("No application form on this board "
+                                        "(job-board listing) — apply via the "
+                                        "posting link with your tailored CV. "
+                                        "The framework cover letter + CV are "
+                                        "ready; browser automation skipped "
+                                        "to preserve memory."),
+                            "url": url,
+                            "title": title,
+                            "company": company,
+                        }
+                        _broadcast_event("application_approved",
+                                         {"url": url, "status": "manual_apply"})
+                        return
                     # fresh dedicated thread state for Playwright (sync-in-asyncio fix)
                     import concurrent.futures
                     def _run():
