@@ -90,8 +90,19 @@ class BrowserWrapper:
             self._storage_state_path = storage_state_path
         self._install_browsers_if_missing()
         self.playwright = sync_playwright().start()
+        # OOM fix (512MB): slim chromium args cut ~50-100MB per instance
+        self._launch_args = [
+            "--disable-dev-shm",      # use /tmp not /dev/shm (tiny in containers)
+            "--disable-gpu",
+            "--disable-extensions",
+            "--no-first-run",
+            "--disable-background-networking",
+            "--disable-sync",
+            "--metrics-recording-only",
+            "--mute-audio",
+        ]
         try:
-            self.browser = self.playwright.chromium.launch(headless=self.headless)
+            self.browser = self.playwright.chromium.launch(headless=self.headless, args=self._launch_args)
         except Exception as e:
             # Browser-binary self-heal: the running service may lack the
             # browser at the default path (Render retrofits neither env vars
@@ -101,7 +112,7 @@ class BrowserWrapper:
             if "Executable doesn't exist" in msg or "headless shell" in msg or "EACCES" in msg or "Failed to launch" in msg:
                 logger.warning("[BrowserWrapper] browser binary missing - self-healing via playwright install chromium")
                 self._install_browsers_if_missing(force=True)
-                self.browser = self.playwright.chromium.launch(headless=self.headless)
+                self.browser = self.playwright.chromium.launch(headless=self.headless, args=self._launch_args)
             else:
                 raise
         ctx_kwargs = {}
