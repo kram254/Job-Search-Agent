@@ -39,6 +39,11 @@ _parsed_cache: dict = {'latest': None}
 # a single-user tool).
 _apply_jobs: dict = {}
 
+# OOM fix: serialize apply workflows - one Chromium alive at a time on the
+# 512MB Render plan.
+import threading as _threading_mod
+_apply_semaphore = _threading_mod.BoundedSemaphore(value=1)
+
 
 def datetime_infix() -> str:
     """Timestamp fragment for temp upload filenames."""
@@ -1281,19 +1286,33 @@ def approve():
             job_state = _apply_jobs[apply_job_id]
             try:
                 job_state["status"] = "running"
-                # fresh dedicated thread state for Playwright (sync-in-asyncio fix)
-                import concurrent.futures
-                def _run():
-                    return orch.start_from_url(
-                        apply_url=url,
-                        mode=mode,
-                        cv_path=cv_path or 'CVs/My CVc.md',
-                        title=title,
-                        company=company,
-                    )
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
-                    future = _ex.submit(_run)
-                    result = future.result(timeout=540)
+                # OOM fix (512MB Render limit): concurrent applies each hold a
+                # Chromium instance (~200-300MB) - two+ at once kills the
+                # instance. A process-wide apply semaphore serializes
+                # workflows: one browser alive at a time, the rest queue.
+                with _apply_semaphore:
+                    # fresh dedicated thread state for Playwright (sync-in-asyncio fix)
+                    import concurrent.futures
+                    def _run():
+                        return orch.start_from_url(
+                            apply_url=url,
+                            mode=mode,
+                            cv_path=cv_path or 'CVs/My CVc.md',
+                            title=title,
+                            company=company,
+                        )
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+                        future = _ex.submit(_run)
+                        result = future.result(timeout=540)
+                    # OOM fix: tear down THIS thread's browser immediately
+                    # after the workflow; thread-local state otherwise keeps
+                    # every Chromium alive until the worker dies.
+                    try:
+                        orch.browser.close()
+                    except Exception:
+                        pass
+                    import gc
+                    gc.collect()
                 # follow-up tracking moved into the async workflow (it was
                 # stranded after the early async return; without it, drafted
                 # applications never got 7/14/21-day follow-ups)
