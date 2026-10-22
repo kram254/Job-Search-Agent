@@ -78,7 +78,9 @@ const api = {
       await new Promise(r => setTimeout(r, 4000))
       const s = await req(`/apply-status/${id}`)
       onStatus?.(s.status)
-      if (s.status === 'done') return s.result ?? s
+      // terminal success states: 'done' (browser workflow finished) or
+      // 'manual_apply' (no-board fast path - posted via the posting link)
+      if (s.status === 'done' || s.status === 'manual_apply') return s.result ?? s
       if (s.status === 'failed') throw new Error(s.error || 'Application workflow failed')
     }
     throw new Error('Application workflow timed out (10 min)')
