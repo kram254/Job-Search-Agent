@@ -26,7 +26,10 @@ type RunHistory = {
   remoteok: number
   linkedin: number
   top: DiscoveredJob[]
-  research?: { total_fresh?: number; sources_hit?: number; dead_dropped?: number; per_source?: Record<string, { found?: number; fresh?: number }> }
+  // universal-researcher stats from /discover's response (shape owned by the
+  // backend; typed loosely here so frontend edits can't break the build)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  research?: any
 }
 
 export default function Discover() {
