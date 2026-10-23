@@ -18,6 +18,7 @@ type DiscoveredJob = {
   // discover-persistence annotations (backend adds these to top_jobs)
   in_feed?: boolean
   external_url?: string
+  verified_live?: boolean
 }
 
 type RunHistory = {
@@ -25,6 +26,7 @@ type RunHistory = {
   remoteok: number
   linkedin: number
   top: DiscoveredJob[]
+  research?: { total_fresh?: number; sources_hit?: number; dead_dropped?: number; per_source?: Record<string, { found?: number; fresh?: number }> }
 }
 
 export default function Discover() {
@@ -51,12 +53,22 @@ export default function Discover() {
       .then(r => {
         addLog(`RemoteOK: ${r.remoteok_count} listings scored`)
         addLog(`LinkedIn: ${r.linkedin_count} listings scored`)
+        const rs = r.research_stats
+        if (rs?.per_source) {
+          for (const [src, v] of Object.entries(rs.per_source)) {
+            if ((v?.fresh ?? 0) > 0) addLog(`Researcher: +${v.fresh} fresh from ${src}`)
+          }
+          if (rs.dead_dropped > 0) addLog(`Liveness gate: dropped ${rs.dead_dropped} dead/expired links`)
+          if (rs.dupes_skipped > 0) addLog(`Dedup: skipped ${rs.dupes_skipped} already-seen`)
+          addLog(`Universal research: ${rs.total_fresh ?? 0} fresh from ${rs.sources_hit ?? 0} extra sources`)
+        }
         addLog(`Top ${r.top_jobs?.length ?? 0} leads saved to output/${r.saved_to?.split('/').pop() ?? ''}`)
         const run: RunHistory = {
           ts: new Date().toLocaleString(),
           remoteok: r.remoteok_count ?? 0,
           linkedin: r.linkedin_count ?? 0,
           top: r.top_jobs ?? [],
+          research: rs,
         }
         setLatest(run)
         setHistory(prev => [run, ...prev.slice(0, 4)])
@@ -115,6 +127,10 @@ export default function Discover() {
               <h2 className="text-sm font-semibold text-white">Latest Run — {latest.ts}</h2>
               <div className="text-xs text-slate-500 mt-0.5">
                 {latest.remoteok} from RemoteOK · {latest.linkedin} from LinkedIn
+                {latest.research?.total_fresh != null && latest.research.total_fresh > 0 && (
+                  <> · <span className="text-green-400 font-medium">+{latest.research.total_fresh} researched</span> from {latest.research.sources_hit} extra sources
+                  {latest.research.dead_dropped > 0 ? ` · ${latest.research.dead_dropped} dead links dropped` : ' · all links verified live'}</>
+                )}
               </div>
             </div>
             <Link href="/jobs" className="text-xs text-blue-400 hover:text-blue-300 transition-colors">All Jobs →</Link>
@@ -145,6 +161,7 @@ export default function Discover() {
                       <span className="text-xs text-slate-600 font-mono">#{i + 1}</span>
                       <span className="text-sm text-white font-medium">{j.title ?? 'Untitled'}</span>
                       {j.source && <span className="text-xs text-slate-600 capitalize">{j.source}</span>}
+                      {j.verified_live && <span className="text-xs text-green-500" title="Link verified live - not expired">● live</span>}
                     </div>
                     <div className="text-xs text-slate-400">{j.company ?? '—'}{j.salary_range ? ` · ${j.salary_range}` : ''}</div>
                     {j.matched_skills && j.matched_skills.length > 0 && (

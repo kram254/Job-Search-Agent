@@ -83,7 +83,9 @@ class TestDiscoverIdSync:
         with patch("agent.app.get_orchestrator") as mo:
             orch = mo.return_value
             orch.candidate_profile = {"skills": {"primary": [], "secondary": []}}
-            with patch("agent.digest.daily_digest.DailyDigest") as MD:
+            with patch("agent.digest.daily_digest.DailyDigest") as MD, \
+             patch("agent.research.universal_researcher.research_everywhere",
+                   return_value={"jobs": [], "stats": {"per_source": {}, "dupes_skipped": 0, "dead_dropped": 0, "total_fresh": 0, "sources_hit": 0}}):
                 MD.return_value.run.return_value = self._fake_result()
                 client = flask_app.app.test_client()
                 resp = client.post("/discover", json={"top_n": 1})
@@ -107,7 +109,9 @@ class TestDiscoverIdSync:
         monkeypatch.setattr(flask_app, "JOBS_RAW", jobs_path)
         with patch("agent.app.get_orchestrator") as mo:
             mo.return_value.candidate_profile = {"skills": {"primary": [], "secondary": []}}
-            with patch("agent.digest.daily_digest.DailyDigest") as MD:
+            with patch("agent.digest.daily_digest.DailyDigest") as MD, \
+             patch("agent.research.universal_researcher.research_everywhere",
+                   return_value={"jobs": [], "stats": {"per_source": {}, "dupes_skipped": 0, "dead_dropped": 0, "total_fresh": 0, "sources_hit": 0}}):
                 MD.return_value.run.return_value = self._fake_result()
                 client = flask_app.app.test_client()
                 resp = client.post("/discover", json={"top_n": 1})

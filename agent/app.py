@@ -1128,6 +1128,31 @@ def discover():
         )
         result = digest.run()
 
+        # Universal-researcher merge (source-breadth fix): the user reported
+        # "same jobs every time" - RemoteOK+LinkedIn's first pages are a tiny,
+        # slow-moving pool. Merge fresh jobs from 5 additional sources
+        # (Remotive, Jobicy, HN hiring threads, WWR, social/careers sweep),
+        # all deduped against the feed and liveness-verified before merging.
+        research_stats = {}
+        try:
+            from agent.research.universal_researcher import research_everywhere
+            with open(JOBS_RAW) as _f:
+                _existing = json.load(_f)
+            _existing_urls = {str(j.get("url") or j.get("link") or "") for j in _existing}
+            _existing_urls.discard("")
+            research = research_everywhere(
+                keywords=keywords or "AI engineer Python",
+                per_source_limit=8,
+                existing_urls=_existing_urls,
+                verify_liveness=True,
+            )
+            research_stats = research["stats"]
+            result["all_jobs"].extend(research["jobs"])  # flows into persistence below
+            logging.info(f"universal researcher: +{len(research['jobs'])} fresh from {research_stats.get('sources_hit')} extra sources")
+        except Exception as _research_err:
+            logging.warning(f"universal researcher skipped: {_research_err}")
+            research_stats = {"error": str(_research_err)}
+
         # Additive (dashboard-persistence fix): persist every scraped job into
         # jobs_raw.json — the file /jobs and the dashboard read from. Previously
         # discover results only went to output/digest_*.json + notifications,
@@ -1242,6 +1267,9 @@ def discover():
             "top_jobs": result["top_jobs"],
             "saved_to": result["saved_to"],
             "notifications": result["notifications"],
+            # universal-researcher stats (additive): per-source counts so the
+            # UI can show where jobs came from
+            "research_stats": research_stats,
             # additive response keys:
             "persisted": persisted,
             "total_in_feed": persisted["total_in_feed"],

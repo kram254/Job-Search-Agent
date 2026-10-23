@@ -57,7 +57,9 @@ def test_discover_persists_scraped_jobs_to_feed():
             orch = MagicMock()
             orch.candidate_profile = {"skills": {"primary": [], "secondary": []}}
             mock_orch.return_value = orch
-            with patch("agent.digest.daily_digest.DailyDigest", FakeDigest):
+            with patch("agent.digest.daily_digest.DailyDigest", FakeDigest), \
+             patch("agent.research.universal_researcher.research_everywhere",
+                   return_value={"jobs": [], "stats": {"per_source": {}, "dupes_skipped": 0, "dead_dropped": 0, "total_fresh": 0, "sources_hit": 0}}):
                 client = flask_app.app.test_client()
                 resp = client.post("/discover", json={"top_n": 1})
 
@@ -93,7 +95,9 @@ def test_discover_persistence_dedupes_by_url():
             orch = MagicMock()
             orch.candidate_profile = {"skills": {"primary": [], "secondary": []}}
             mock_orch.return_value = orch
-            with patch("agent.digest.daily_digest.DailyDigest", FakeDigest):
+            with patch("agent.digest.daily_digest.DailyDigest", FakeDigest), \
+             patch("agent.research.universal_researcher.research_everywhere",
+                   return_value={"jobs": [], "stats": {"per_source": {}, "dupes_skipped": 0, "dead_dropped": 0, "total_fresh": 0, "sources_hit": 0}}):
                 client = flask_app.app.test_client()
                 resp = client.post("/discover", json={"top_n": 1})
 
@@ -115,7 +119,9 @@ def test_discover_survives_persistence_failure():
             orch = MagicMock()
             orch.candidate_profile = {"skills": {"primary": [], "secondary": []}}
             mock_orch.return_value = orch
-            with patch("agent.digest.daily_digest.DailyDigest", FakeDigest):
+            with patch("agent.digest.daily_digest.DailyDigest", FakeDigest), \
+             patch("agent.research.universal_researcher.research_everywhere",
+                   return_value={"jobs": [], "stats": {"per_source": {}, "dupes_skipped": 0, "dead_dropped": 0, "total_fresh": 0, "sources_hit": 0}}):
                 client = flask_app.app.test_client()
                 resp = client.post("/discover", json={"top_n": 1})
 
