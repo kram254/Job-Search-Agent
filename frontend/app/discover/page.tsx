@@ -58,8 +58,8 @@ export default function Discover() {
         addLog(`LinkedIn: ${r.linkedin_count} listings scored`)
         const rs = r.research_stats
         if (rs?.per_source) {
-          for (const [src, v] of Object.entries(rs.per_source)) {
-            if ((v?.fresh ?? 0) > 0) addLog(`Researcher: +${v.fresh} fresh from ${src}`)
+          for (const [srcName, v] of Object.entries(rs.per_source) as [string, { fresh?: number } | undefined][]) {
+            if ((v?.fresh ?? 0) > 0) addLog(`Researcher: +${v.fresh} fresh from ${srcName}`)
           }
           if (rs.dead_dropped > 0) addLog(`Liveness gate: dropped ${rs.dead_dropped} dead/expired links`)
           if (rs.dupes_skipped > 0) addLog(`Dedup: skipped ${rs.dupes_skipped} already-seen`)
